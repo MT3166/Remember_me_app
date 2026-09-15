@@ -1,0 +1,21 @@
+[
+  {
+    "variant": "studio-green",
+    "checks": [
+      "four independent screens",
+      "detail navigation",
+      "record start/stop",
+      "original toggle",
+      "editing and empty validation",
+      "save/cover transition",
+      "parent settings",
+      "no image failures",
+      "no page/console errors"
+    ],
+    "layouts": [
+      "portrait",
+      "landscape",
+      "mobile"
+    ]
+  }
+]

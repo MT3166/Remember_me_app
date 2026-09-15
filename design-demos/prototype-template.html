@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>@@title@@ · 小小日记设计初稿</title>
+<!-- Assumptions: portrait-first Android diary for a five-year-old. This is an interactive design prototype. Entries and cover photos are demonstration material. Microphone and model APIs are not connected. Each device is an independent state machine. -->
+<style>@@css@@</style></head><body>
+<main class="presentation">
+  <header class="presentation-head"><div><small>小小日记 / UI & UX 重新设计 / 竖屏优先</small><h1>@@title@@</h1><p>@@description@@</p></div><nav class="presentation-tools" aria-label="设计预览"><a href="gallery.html">A</a><a href="studio.html">B</a><a href="book.html">C</a><a href="@@filename@@?mode=app" target="_blank">单屏体验</a></nav></header>
+  <div class="boards">
+    <section class="board"><div class="board-title">01 首页<span>找到今天，也找到回忆</span></div><div class="device"><div id="home" class="app theme-@@variant@@" data-initial="home"></div></div><p class="board-caption">@@home-caption@@</p></section>
+    <section class="board"><div class="board-title">02 记录<span>语音与文字都能用</span></div><div class="device"><div id="record" class="app theme-@@variant@@" data-initial="record"></div></div><p class="board-caption">点按开始、点按结束。主要操作留在底部，内容可以独立滚动。</p></section>
+    <section class="board"><div class="board-title">03 确认<span>先听听，再收起来</span></div><div class="device"><div id="review" class="app theme-@@variant@@" data-initial="review"></div></div><p class="board-caption">先听正文，再按需展开原文与修改。孩子不用同时面对两个长文本框。</p></section>
+    <section class="board"><div class="board-title">04 阅读<span>把一天变成一篇故事</span></div><div class="device"><div id="read" class="app theme-@@variant@@" data-initial="read"></div></div><p class="board-caption">正文先保存，封面可稍后再画。横屏时正文与封面并排，竖屏时上下阅读。</p></section>
+  </div>
+  <footer class="presentation-foot">交互设计初稿 · 四个界面均可点击 · 演示日记与封面样图，不调用麦克风或模型。选定方向后再落实到安卓 APP。<br>绘画照片：<a href="https://commons.wikimedia.org/wiki/File:Child_engaged_in_drawing_activity_with_colorful_crayons_at_a_wooden_table.jpg">Shixart1985</a> / <a href="https://creativecommons.org/licenses/by/2.0/">CC BY 2.0</a>（按画面裁切）；场景照片：Unsplash；图标：Lucide / ISC；字体：LXGW WenKai TC、Noto Sans SC / OFL。完整记录见 <a href="asset-sources.md">素材来源</a>。</footer>
+</main>
+<script>const VARIANT=@@variant-json@@;const ASSETS=@@assets@@;const ICONS=@@icons@@;
+@@script@@
+</script></body></html>

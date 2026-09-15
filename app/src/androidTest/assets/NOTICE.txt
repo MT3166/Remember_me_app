@@ -1,0 +1,9 @@
+Test fixtures only; these images are not included in the application APK.
+
+painting.jpg: Shixart1985, CC BY 2.0.
+https://commons.wikimedia.org/wiki/File:Child_engaged_in_drawing_activity_with_colorful_crayons_at_a_wooden_table.jpg
+leaves.jpg and bread.jpg: Unsplash License.
+https://images.unsplash.com/photo-1497250681960-ef046c08a56e
+https://images.unsplash.com/photo-1509440159596-0249088772ff
+
+These public sample images are not photos of the user's child or actual model output.
