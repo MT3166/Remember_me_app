@@ -18,6 +18,12 @@ import java.io.File
 import kotlinx.coroutines.*
 
 interface AudioRecorder {
+    fun setAudioSource(source: Int)
+    fun setOutputFormat(format: Int)
+    fun setAudioEncoder(encoder: Int)
+    fun setAudioChannels(channels: Int)
+    fun setAudioSamplingRate(samplingRate: Int)
+    fun setAudioEncodingBitRate(bitRate: Int)
     fun setOutputFile(path: String)
     fun prepare()
     fun start()
@@ -43,15 +49,12 @@ private class HandlerRecordingScheduler(private val handler: Handler) : Recordin
 }
 
 private class MediaAudioRecorder(private val delegate: MediaRecorder) : AudioRecorder {
-    init {
-        @Suppress("DEPRECATION")
-        delegate.setAudioSource(MediaRecorder.AudioSource.MIC)
-        delegate.setOutputFormat(MediaRecorder.OutputFormat.AAC_ADTS)
-        delegate.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-        delegate.setAudioChannels(1)
-        delegate.setAudioSamplingRate(16000)
-        delegate.setAudioEncodingBitRate(64000)
-    }
+    override fun setAudioSource(source: Int) = delegate.setAudioSource(source)
+    override fun setOutputFormat(format: Int) = delegate.setOutputFormat(format)
+    override fun setAudioEncoder(encoder: Int) = delegate.setAudioEncoder(encoder)
+    override fun setAudioChannels(channels: Int) = delegate.setAudioChannels(channels)
+    override fun setAudioSamplingRate(samplingRate: Int) = delegate.setAudioSamplingRate(samplingRate)
+    override fun setAudioEncodingBitRate(bitRate: Int) = delegate.setAudioEncodingBitRate(bitRate)
     override fun setOutputFile(path: String) = delegate.setOutputFile(path)
     override fun prepare() = delegate.prepare()
     override fun start() = delegate.start()
@@ -122,6 +125,12 @@ class SpeechController(
             recordingFile = File.createTempFile("speech-", ".aac", context.cacheDir)
             val device = recorderFactory.create()
             recorder = device
+            device.setAudioSource(MediaRecorder.AudioSource.MIC)
+            device.setOutputFormat(MediaRecorder.OutputFormat.AAC_ADTS)
+            device.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            device.setAudioChannels(1)
+            device.setAudioSamplingRate(16000)
+            device.setAudioEncodingBitRate(64000)
             device.setOutputFile(recordingFile!!.absolutePath)
             device.prepare()
             device.start()

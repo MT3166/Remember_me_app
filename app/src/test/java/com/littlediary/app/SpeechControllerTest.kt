@@ -2,6 +2,7 @@ package com.littlediary.app
 
 import android.content.Context
 import android.content.ContextWrapper
+import android.media.MediaRecorder
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicInteger
@@ -30,6 +31,22 @@ class SpeechControllerTest {
         assertTrue(endedAt >= startedAt)
         assertEquals(1, recorder.stopCalls)
         assertTrue(error.isBlank())
+        controller.close()
+    }
+
+    @Test
+    fun recordingUsesExpectedAacConfiguration() {
+        val recorder = FakeRecorder(writeAudio = true)
+        val controller = controller(recorder)
+
+        controller.startRecording({ _, _, _ -> }, {})
+
+        assertEquals(MediaRecorder.OutputFormat.AAC_ADTS, recorder.outputFormatValue)
+        assertEquals(MediaRecorder.AudioEncoder.AAC, recorder.audioEncoderValue)
+        assertEquals(1, recorder.audioChannelsValue)
+        assertEquals(16_000, recorder.audioSamplingRateValue)
+        assertEquals(64_000, recorder.audioEncodingBitRateValue)
+        controller.cancel()
         controller.close()
     }
 
@@ -123,8 +140,19 @@ class SpeechControllerTest {
     ) : AudioRecorder {
         private var output: String = ""
         var stopCalls = 0
+        var outputFormatValue = 0
+        var audioEncoderValue = 0
+        var audioChannelsValue = 0
+        var audioSamplingRateValue = 0
+        var audioEncodingBitRateValue = 0
         val outputFile: String? get() = output.takeIf { it.isNotBlank() }
 
+        override fun setAudioSource(source: Int) = Unit
+        override fun setOutputFormat(format: Int) { outputFormatValue = format }
+        override fun setAudioEncoder(encoder: Int) { audioEncoderValue = encoder }
+        override fun setAudioChannels(channels: Int) { audioChannelsValue = channels }
+        override fun setAudioSamplingRate(samplingRate: Int) { audioSamplingRateValue = samplingRate }
+        override fun setAudioEncodingBitRate(bitRate: Int) { audioEncodingBitRateValue = bitRate }
         override fun setOutputFile(path: String) { output = path }
         override fun prepare() { if (failOnPrepare) error("permission denied") }
         override fun start() = Unit
