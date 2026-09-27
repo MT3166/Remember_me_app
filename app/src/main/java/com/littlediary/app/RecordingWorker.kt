@@ -14,12 +14,15 @@ internal class RecordingWorkerProcessor(
     private val repository: RecordingRepository,
     private val settings: () -> ModelSettings,
     private val transcribe: suspend (ModelSettings, File) -> String,
+    private val dailyStoryRepository: DailyStoryRepository? = null,
+    private val enqueueDraft: ((String) -> Unit)? = null,
 ) {
     suspend fun process(segmentId: String): RecordingWorkOutcome {
         val segment = repository.get(segmentId) ?: return RecordingWorkOutcome.FAILURE
         if (segment.transcript.isNotBlank() &&
             segment.state in setOf(RecordingState.TRANSCRIBED, RecordingState.ATTACHED_TO_DAY)
         ) {
+            attachToDailyStory(segment)
             return RecordingWorkOutcome.SUCCESS
         }
 
@@ -36,9 +39,16 @@ internal class RecordingWorkerProcessor(
             if (current.transcript.isNotBlank() &&
                 current.state in setOf(RecordingState.TRANSCRIBED, RecordingState.ATTACHED_TO_DAY)
             ) {
+                attachToDailyStory(current)
                 RecordingWorkOutcome.SUCCESS
             } else {
                 repository.update(current.copy(
+                    state = RecordingState.TRANSCRIBED,
+                    transcript = transcript,
+                    error = "",
+                    revision = current.revision + 1,
+                ))
+                attachToDailyStory(current.copy(
                     state = RecordingState.TRANSCRIBED,
                     transcript = transcript,
                     error = "",
@@ -75,6 +85,14 @@ internal class RecordingWorkerProcessor(
         }
     }
 
+    private fun attachToDailyStory(segment: RecordingSegment) {
+        val stories = dailyStoryRepository ?: return
+        val alreadyAttached = stories.get(segment.dayKey)?.segmentIds?.contains(segment.id) == true
+        if (alreadyAttached) return
+        stories.appendSegment(segment.dayKey, segment.id, segment.transcript, segment.createdAt)
+        enqueueDraft?.invoke(segment.dayKey)
+    }
+
     private fun Throwable.isNetworkFailure(): Boolean = generateSequence(this) { it.cause }
         .any { it is IOException }
 
@@ -99,10 +117,15 @@ class RecordingWorker(
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
         val segmentId = inputData.getString(INPUT_SEGMENT_ID) ?: return Result.failure()
+        val dailyStoryRepository = DailyStoryRepository(applicationContext)
+        val dailyStoryScheduler = DailyStoryWorkScheduler(applicationContext)
+        dailyStoryScheduler.enqueueFinalForPreviousDays()
         val outcome = RecordingWorkerProcessor(
             repository = RecordingRepository(applicationContext),
             settings = { SettingsStore(applicationContext).load() },
             transcribe = SpeechClient()::transcribe,
+            dailyStoryRepository = dailyStoryRepository,
+            enqueueDraft = dailyStoryScheduler::enqueueDraft,
         ).process(segmentId)
         return outcome.toWorkerResult()
     }
