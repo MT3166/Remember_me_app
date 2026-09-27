@@ -23,6 +23,14 @@ class RecordingRepositoryTest {
     }
 
     @Test
+    fun repositoryUsesConfiguredZoneForDayGrouping() {
+        val repository = RecordingRepository(TestContext(), zone = ZoneId.of("UTC"))
+        val timestamp = Instant.parse("2026-09-19T23:30:00Z").toEpochMilli()
+
+        assertEquals("2026-09-19", repository.dayKey(timestamp))
+    }
+
+    @Test
     fun recordingSegmentSurvivesJsonRoundTrip() {
         val segment = sampleSegment(
             state = RecordingState.RETRYABLE_ERROR,
@@ -51,6 +59,23 @@ class RecordingRepositoryTest {
     }
 
     @Test
+    fun staleRevisionFromAnotherRepositoryCannotOverwritePersistedState() {
+        val context = TestContext()
+        val first = RecordingRepository(context)
+        val second = RecordingRepository(context)
+        val original = sampleSegment()
+        val firstUpdate = original.copy(state = RecordingState.TRANSCRIBING, revision = 1)
+        val staleUpdate = original.copy(state = RecordingState.RETRYABLE_ERROR, revision = 1)
+
+        first.insert(original)
+        second.get(original.id)
+        first.update(firstUpdate)
+        second.update(staleUpdate)
+
+        assertEquals(firstUpdate, first.get(original.id))
+    }
+
+    @Test
     fun expiredAttachedAudioIsDeletedButPendingAudioIsProtected() {
         val context = TestContext()
         val repository = RecordingRepository(context, AudioRetention.SEVEN)
@@ -70,6 +95,65 @@ class RecordingRepositoryTest {
         assertFalse(repository.audioFile(expired).exists())
         assertFalse(repository.deleteAudioIfEligible(pending, now))
         assertTrue(repository.audioFile(pending).exists())
+    }
+
+    @Test
+    fun retryableErrorAndStaleCleanupObjectsCannotDeleteAudio() {
+        val context = TestContext()
+        val repository = RecordingRepository(context, AudioRetention.SEVEN)
+        val now = Instant.parse("2026-09-20T00:00:00Z").toEpochMilli()
+        val attached = sampleSegment(createdAt = now - 8 * 24 * 60 * 60 * 1000L, state = RecordingState.ATTACHED_TO_DAY)
+        val retryable = attached.copy(state = RecordingState.RETRYABLE_ERROR, revision = 1)
+
+        repository.insert(attached)
+        repository.audioFile(attached).writeText("audio")
+        repository.update(retryable)
+
+        assertFalse(repository.deleteAudioIfEligible(attached, now))
+        assertTrue(repository.audioFile(attached).exists())
+    }
+
+    @Test
+    fun persistedStateProtectsAudioFromStaleAttachedCleanupObject() {
+        val context = TestContext()
+        val repository = RecordingRepository(context, AudioRetention.SEVEN)
+        val now = Instant.parse("2026-09-20T00:00:00Z").toEpochMilli()
+        val saved = sampleSegment(createdAt = now - 8 * 24 * 60 * 60 * 1000L, state = RecordingState.SAVED)
+        val staleAttached = saved.copy(state = RecordingState.ATTACHED_TO_DAY)
+
+        repository.insert(saved)
+        repository.audioFile(saved).writeText("audio")
+
+        assertFalse(repository.deleteAudioIfEligible(staleAttached, now))
+        assertTrue(repository.audioFile(saved).exists())
+    }
+
+    @Test
+    fun foreverRetentionNeverDeletesExpiredAttachedAudio() {
+        val context = TestContext()
+        val repository = RecordingRepository(context)
+        val now = Instant.parse("2026-09-20T00:00:00Z").toEpochMilli()
+        val segment = sampleSegment(createdAt = now - 365 * 24 * 60 * 60 * 1000L, state = RecordingState.ATTACHED_TO_DAY)
+
+        repository.insert(segment)
+        repository.audioFile(segment).writeText("audio")
+
+        assertFalse(repository.deleteAudioIfEligible(segment, now))
+        assertTrue(repository.audioFile(segment).exists())
+    }
+
+    @Test
+    fun malformedMetadataDoesNotPreventLoadingValidSegments() {
+        val context = TestContext()
+        val repository = RecordingRepository(context)
+        val valid = sampleSegment()
+        val directory = File(context.filesDir, "voice-diary/segments").apply { mkdirs() }
+
+        File(directory, "broken.json").writeText("{not valid json")
+        repository.insert(valid)
+
+        assertEquals(listOf(valid), repository.loadAll())
+        assertEquals(null, repository.get("broken"))
     }
 
     private fun sampleSegment(

@@ -3,13 +3,17 @@ package com.littlediary.app
 import android.content.Context
 import java.io.File
 import java.io.FileOutputStream
+import java.time.ZoneId
 import java.util.concurrent.TimeUnit
 
 class RecordingRepository(
     context: Context,
     private val retention: AudioRetention = AudioRetention.FOREVER,
+    private val zone: ZoneId = DEFAULT_RECORDING_ZONE,
 ) {
     private val directory = File(context.filesDir, "voice-diary/segments").apply { mkdirs() }
+
+    fun dayKey(timestamp: Long): String = localDayKey(timestamp, zone)
 
     @Synchronized
     fun insert(segment: RecordingSegment) {
@@ -35,7 +39,7 @@ class RecordingRepository(
     fun update(segment: RecordingSegment) {
         validateId(segment.id)
         val existing = read(segment.id)
-        if (existing != null && existing.revision > segment.revision) return
+        if (existing != null && existing.revision >= segment.revision) return
         persist(prepare(segment))
     }
 
@@ -48,10 +52,11 @@ class RecordingRepository(
 
     @Synchronized
     fun deleteAudioIfEligible(segment: RecordingSegment, now: Long): Boolean {
+        val current = read(segment.id) ?: return false
         val days = retention.days ?: return false
-        if (segment.state != RecordingState.ATTACHED_TO_DAY || now < segment.createdAt) return false
-        if (now - segment.createdAt < TimeUnit.DAYS.toMillis(days)) return false
-        return audioFile(segment).delete()
+        if (current.state != RecordingState.ATTACHED_TO_DAY || now < current.createdAt) return false
+        if (now - current.createdAt < TimeUnit.DAYS.toMillis(days)) return false
+        return audioFile(current).delete()
     }
 
     private fun prepare(segment: RecordingSegment): RecordingSegment {
@@ -76,7 +81,11 @@ class RecordingRepository(
     private fun read(id: String): RecordingSegment? {
         val file = metadataFile(id)
         if (!file.exists()) return null
-        return decode(file.readText(Charsets.UTF_8))
+        return try {
+            decode(file.readText(Charsets.UTF_8))
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun metadataFile(id: String): File = File(directory, "$id.json")

@@ -7,6 +7,8 @@ enum class RecordingState { SAVED, TRANSCRIBING, TRANSCRIBED, ATTACHED_TO_DAY, R
 
 enum class AudioRetention(val days: Long?) { SEVEN(7), THIRTY(30), NINETY(90), FOREVER(null) }
 
+val DEFAULT_RECORDING_ZONE: ZoneId = ZoneId.of("Asia/Shanghai")
+
 data class RecordingSegment(
     val id: String,
     val dayKey: String,
@@ -21,5 +23,5 @@ data class RecordingSegment(
     val revision: Long = 0,
 )
 
-fun localDayKey(timestamp: Long, zone: ZoneId = ZoneId.systemDefault()): String =
+fun localDayKey(timestamp: Long, zone: ZoneId = DEFAULT_RECORDING_ZONE): String =
     Instant.ofEpochMilli(timestamp).atZone(zone).toLocalDate().toString()
