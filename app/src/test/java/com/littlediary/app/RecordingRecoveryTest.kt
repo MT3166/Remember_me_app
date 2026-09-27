@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import java.io.File
 import java.nio.file.Files
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -53,14 +54,44 @@ class RecordingRecoveryTest {
     }
 
     @Test
+    fun recoverOrphanAudioCreatesMetadataIdempotentlyWithoutChangingBytes() {
+        val context = TestContext()
+        val repository = RecordingRepository(context)
+        val bytes = byteArrayOf(0, 1, 2, 3, 127, -1, -128)
+        val orphan = File(context.getFilesDir(), "voice-diary/segments/orphan-raw.aac").apply {
+            parentFile!!.mkdirs()
+            writeBytes(bytes)
+        }
+
+        val first = repository.recoverOrphanAudio(System.currentTimeMillis())
+        val firstSegment = repository.get("orphan-raw")
+
+        assertEquals(1, first.size)
+        assertEquals(firstSegment, first.single())
+        assertEquals("orphan-raw", firstSegment?.id)
+        assertEquals(localDayKey(firstSegment!!.createdAt), firstSegment.dayKey)
+        assertArrayEquals(bytes, repository.audioFile(firstSegment).readBytes())
+
+        val second = repository.recoverOrphanAudio(System.currentTimeMillis() + DAY)
+
+        assertEquals(first, second)
+        assertEquals(firstSegment, repository.get("orphan-raw"))
+        assertArrayEquals(bytes, orphan.readBytes())
+        assertArrayEquals(bytes, repository.audioFile(firstSegment).readBytes())
+    }
+
+    // DiaryViewModel.finishRecording calls prepare before viewModelScope, then invokes
+    // finishRecording from that scope; this is the JVM-safe seam for its real handoff.
+    @Test
     fun finishRecordingPersistsAudioMetadataAndEnqueuesSegment() {
         val context = TestContext()
         val repository = RecordingRepository(context)
         val enqueued = mutableListOf<String>()
+        val bytes = byteArrayOf(1, 2, 3, 4, -1)
         val scheduler = RecordingWorkScheduler(context) { _, _, request ->
             enqueued += request.workSpec.input.getString(RecordingWorker.INPUT_SEGMENT_ID).orEmpty()
         }
-        val source = File(context.getCacheDir(), "speech.aac").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val source = File(context.getCacheDir(), "speech.aac").apply { writeBytes(bytes) }
         val handoff = RecordingCaptureHandoff(repository, scheduler)
 
         val segment = handoff.prepare(source, 1_000L, 2_000L)
@@ -68,6 +99,7 @@ class RecordingRecoveryTest {
 
         assertEquals(segment, repository.get(segment.id))
         assertTrue(repository.audioFile(segment).exists())
+        assertArrayEquals(bytes, repository.audioFile(segment).readBytes())
         assertEquals(listOf(segment.id), enqueued)
         assertFalse(source.exists())
     }
