@@ -153,6 +153,11 @@ class SpeechController(
         }
     }
 
+    fun startRecording(config: ModelSettings, onSaved: (File, Long, Long) -> Unit, onError: (String) -> Unit) {
+        settings = config
+        startRecording(onSaved, onError)
+    }
+
     private data class FinishedRecording(val file: File, val startedAt: Long, val endedAt: Long)
 
     private fun finishRecording(): FinishedRecording? {

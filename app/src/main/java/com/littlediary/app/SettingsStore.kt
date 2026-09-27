@@ -57,10 +57,11 @@ class SettingsStore(context: Context, storageName: String = "model-settings.enc"
         fun encode(settings: ModelSettings): JSONObject {
             val s = settings.normalized().rememberProfiles()
             return JSONObject().apply {
-                put("version", 4)
+                put("version", 5)
                 put("useMiniMaxSpeech", s.useMiniMaxSpeech)
                 put("reuseMiniMaxKeyForSpeech", s.reuseMiniMaxKeyForSpeech)
                 put("speechKey", s.speechKey)
+                put("audioRetention", s.audioRetention.name)
                 put("protocol", s.protocol.name); put("textBaseUrl", s.textBaseUrl)
                 put("textModel", s.textModel); put("textKey", s.textKey)
                 put("imageUrl", s.imageUrl); put("imageModel", s.imageModel); put("imageKey", s.imageKey)
@@ -100,12 +101,16 @@ class SettingsStore(context: Context, storageName: String = "model-settings.enc"
                 val value = values.getJSONObject(name)
                 imageProfiles[Provider.valueOf(name)] = ImageProviderConfig(value.getString("url"), value.getString("model"), value.getString("key"), ImageApi.valueOf(value.getString("api")))
             } }
+            val audioRetention = decodeAudioRetention(j.optString("audioRetention", AudioRetention.FOREVER.name))
             return ModelSettings(protocol, textUrl, migrateModel(textProvider, j.getString("textModel")), j.getString("textKey"), imageUrl,
                 j.getString("imageModel"), j.getString("imageKey"), textProvider, imageProvider,
                 if (j.has("imageApi")) ImageApi.valueOf(j.getString("imageApi")) else imagePreset(imageProvider).api,
                 j.optBoolean("reuseTextKeyForImages", false), textProfiles, imageProfiles,
                 j.optBoolean("useMiniMaxSpeech", true), j.optBoolean("reuseMiniMaxKeyForSpeech", true),
-                j.optString("speechKey", "")).normalized().rememberProfiles()
+                j.optString("speechKey", ""), audioRetention).normalized().rememberProfiles()
         }
+
+        internal fun decodeAudioRetention(value: String): AudioRetention =
+            runCatching { AudioRetention.valueOf(value) }.getOrDefault(AudioRetention.FOREVER)
     }
 }

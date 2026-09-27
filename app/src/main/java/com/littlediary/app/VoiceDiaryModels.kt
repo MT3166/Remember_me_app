@@ -7,6 +7,16 @@ enum class RecordingState { SAVED, TRANSCRIBING, TRANSCRIBED, ATTACHED_TO_DAY, R
 
 enum class AudioRetention(val days: Long?) { SEVEN(7), THIRTY(30), NINETY(90), FOREVER(null) }
 
+fun AudioRetention.label(): String = when (this) {
+    AudioRetention.SEVEN -> "7 天"
+    AudioRetention.THIRTY -> "30 天"
+    AudioRetention.NINETY -> "90 天"
+    AudioRetention.FOREVER -> "永久"
+}
+
+fun RecordingState.needsTranscriptionRecovery(): Boolean = this == RecordingState.SAVED ||
+    this == RecordingState.TRANSCRIBING || this == RecordingState.RETRYABLE_ERROR
+
 val DEFAULT_RECORDING_ZONE: ZoneId = ZoneId.of("Asia/Shanghai")
 
 data class RecordingSegment(

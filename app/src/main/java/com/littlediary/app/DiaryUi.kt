@@ -296,6 +296,10 @@ private fun ColumnScope.RecordPage(d: Diary, vm: DiaryViewModel, speech: SpeechC
                 Text("${d.body.length} / 12000", color = Muted, fontSize = 13.sp)
             } else {
                 VoiceSurface(speech, onRecord)
+                vm.recordingNotice?.let { notice ->
+                    Text(notice, color = if (notice.contains("失败") || notice.contains("再试")) Coral else Muted,
+                        style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+                }
                 if (d.body.isNotBlank()) {
                     Text("已经记下的话", color = Muted, style = MaterialTheme.typography.titleMedium)
                     SelectionContainer { Text(d.body, style = MaterialTheme.typography.bodyMedium) }
@@ -469,8 +473,10 @@ private fun ReadingText(d: Diary) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(settings: ModelSettings, speechAvailable: Boolean, onBack: () -> Unit, onProviders: () -> Unit) {
+fun SettingsScreen(settings: ModelSettings, speechAvailable: Boolean, onBack: () -> Unit, onProviders: () -> Unit,
+    onRetentionChange: (AudioRetention) -> Unit = {}) {
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Tool(Icons.AutoMirrored.Filled.ArrowBack, "返回", onClick = onBack); Text("家长设置", style = MaterialTheme.typography.titleLarge)
@@ -484,7 +490,30 @@ fun SettingsScreen(settings: ModelSettings, speechAvailable: Boolean, onBack: ()
                 Command("配置供应商", Icons.Default.Cloud, Modifier.fillMaxWidth(), onClick = onProviders)
                 HorizontalDivider(Modifier.padding(vertical = 8.dp)); Text("设备与数据", style = MaterialTheme.typography.titleLarge)
                 Text("语音识别：${if (settings.useMiniMaxSpeech) "MiniMax · asr-1.0" else "系统服务"}")
+                RetentionField(settings.audioRetention, onRetentionChange)
                 Text("日记与封面保存在本机。MiniMax 识别会上传录音并按用量计费；校准时正文发送到文字接口；生图时画面描述发送到图片接口。系统语音服务可能联网处理录音。卸载 APP 会删除本机日记。", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun RetentionField(value: AudioRetention, onChange: (AudioRetention) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("原始录音保留时长", style = MaterialTheme.typography.titleMedium)
+        Text("只清理已经完成处理、且已归入日记的原始音频；等待识别或失败的录音会保留。", style = MaterialTheme.typography.bodyMedium)
+        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
+            OutlinedTextField(value.label(), {}, Modifier.menuAnchor().fillMaxWidth(), readOnly = true,
+                label = { Text("保留时长") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) })
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                AudioRetention.entries.forEach { option ->
+                    DropdownMenuItem(text = { Text(option.label()) }, onClick = {
+                        expanded = false
+                        onChange(option)
+                    })
+                }
             }
         }
     }

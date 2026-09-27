@@ -94,11 +94,21 @@ private fun DiaryApplication(vm: DiaryViewModel = viewModel()) {
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+    fun startRecordingForDiary(id: String) {
+        if (vm.settings.useMiniMaxSpeech) {
+            try {
+                vm.settings.requireSpeechKey()
+                speech.startRecording(vm.settings, vm::finishRecording, vm::notify)
+            } catch (e: IllegalArgumentException) { vm.notify(e.message.orEmpty()) }
+        } else {
+            speech.start(id, vm.settings, { if (vm.appendSpeech(id, it)) vm.correct() }, vm::notify)
+        }
+    }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val id = permissionDiaryId
         permissionDiaryId = null
         if (granted && id != null && vm.selectedId == id && vm.stage == DiaryStage.RECORD && !settingsOpen) {
-            speech.start(id, vm.settings, { if (vm.appendSpeech(id, it)) vm.correct() }, vm::notify)
+            startRecordingForDiary(id)
         } else if (!granted) vm.notify("麦克风权限未开启，仍然可以输入文字")
     }
 
@@ -109,7 +119,7 @@ private fun DiaryApplication(vm: DiaryViewModel = viewModel()) {
         if (!vm.settings.useMiniMaxSpeech && !android.speech.SpeechRecognizer.isRecognitionAvailable(context)) {
             vm.notify("平板没有可用的系统语音识别服务，可以先使用键盘语音输入")
         } else if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            speech.start(id, vm.settings, { if (vm.appendSpeech(id, it)) vm.correct() }, vm::notify)
+            startRecordingForDiary(id)
         } else {
             permissionDiaryId = id
             permission.launch(Manifest.permission.RECORD_AUDIO)
@@ -151,7 +161,7 @@ private fun DiaryApplication(vm: DiaryViewModel = viewModel()) {
                 onSave = { vm.saveSettings(vm.providerDraft ?: vm.settings) { providerOpen = false } },
                 onTest = { kind -> vm.testSettings(vm.providerDraft ?: vm.settings, kind) })
             settingsOpen -> SettingsScreen(vm.settings, speech.available, onBack = { back() },
-                onProviders = { vm.beginProviderSettings(); providerOpen = true })
+                onProviders = { vm.beginProviderSettings(); providerOpen = true }, onRetentionChange = vm::saveAudioRetention)
             vm.loadFailed -> LoadFailureScreen(vm::load)
             vm.selected != null -> EditorScreen(
                 diary = vm.selected!!, vm = vm, speech = speech, speaking = speaking,

@@ -62,6 +62,10 @@ class RecordingRepository(
         }
     }
 
+    fun cleanExpiredAudio(now: Long): Int = synchronized(PROCESS_LOCK) {
+        loadAll().count { deleteAudioIfEligible(it, now) }
+    }
+
     private fun prepare(segment: RecordingSegment): RecordingSegment {
         val source = File(segment.audioFile)
         val target = audioFile(segment)

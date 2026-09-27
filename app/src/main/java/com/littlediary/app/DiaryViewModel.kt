@@ -13,7 +13,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.net.SocketTimeoutException
+import java.util.UUID
 
 class DiaryViewModel(application: Application) : AndroidViewModel(application) {
     val speech = SpeechController(application)
@@ -40,6 +42,8 @@ class DiaryViewModel(application: Application) : AndroidViewModel(application) {
     var correctionError by mutableStateOf<String?>(null); private set
     var coverError by mutableStateOf<String?>(null); private set
     var message by mutableStateOf<String?>(null); private set
+    var recordingNotice by mutableStateOf<String?>(null); private set
+    var recordings by mutableStateOf<List<RecordingSegment>>(emptyList()); private set
     val selected: Diary? get() = entries.firstOrNull { it.id == selectedId }
     val hasUnsavedProviderChanges: Boolean get() = providerDraft?.let {
         it.normalized().rememberProfiles() != settings.normalized().rememberProfiles()
@@ -74,12 +78,64 @@ class DiaryViewModel(application: Application) : AndroidViewModel(application) {
             }
             try { settings = withContext(Dispatchers.IO) { settingsStore.load() } }
             catch (_: Exception) { message = "模型设置无法读取，请家长重新保存设置" }
+            try {
+                recordings = withContext(Dispatchers.IO) { recoverRecordings(settings.audioRetention) }
+                recordingNotice = recordings.latestRecordingNotice()
+            } catch (_: Exception) {
+                message = "录音队列读取失败，原始录音未改动"
+            }
             loading = false
         }
     }
 
     fun notify(text: String) { message = text }
     fun dismissMessage() { message = null }
+
+    fun finishRecording(file: File, startedAt: Long, endedAt: Long) {
+        val segment = RecordingSegment(
+            id = UUID.randomUUID().toString(),
+            dayKey = localDayKey(startedAt),
+            createdAt = endedAt,
+            startedAt = startedAt,
+            endedAt = endedAt,
+            audioFile = file.absolutePath,
+        )
+        viewModelScope.launch {
+            try {
+                val saved = withContext(Dispatchers.IO) {
+                    val repository = recordingRepository(settings.audioRetention)
+                    repository.insert(segment)
+                    repository.cleanExpiredAudio(System.currentTimeMillis())
+                    repository.get(segment.id) ?: error("录音元数据保存失败")
+                }
+                recordingScheduler().enqueueTranscription(saved.id)
+                file.delete()
+                recordings = withContext(Dispatchers.IO) { recordingRepository(settings.audioRetention).loadAll() }
+                recordingNotice = "录音已收好，正在等待识别"
+                message = "收好啦"
+            } catch (_: Exception) {
+                recordingNotice = "录音保存失败，请重试"
+                message = "录音保存失败，请检查存储空间后重试"
+            }
+        }
+    }
+
+    fun saveAudioRetention(value: AudioRetention) {
+        if (busy.isNotBlank() || value == settings.audioRetention) return
+        val next = settings.copy(audioRetention = value)
+        val token = operationId
+        busy = "正在保存录音设置"
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { settingsStore.save(next) }
+                settings = next.normalized().rememberProfiles()
+                recordings = withContext(Dispatchers.IO) { recoverRecordings(value) }
+                recordingNotice = recordings.latestRecordingNotice()
+                message = "录音保留设置已保存"
+            } catch (e: Exception) { message = errorMessage(e) }
+            finally { if (operationId == token) busy = "" }
+        }
+    }
 
     fun newDiary(useVoice: Boolean = true) {
         if (loading || loadFailed) return
@@ -264,6 +320,8 @@ class DiaryViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 withContext(Dispatchers.IO) { settingsStore.save(value) }
                 settings = value.normalized().rememberProfiles()
+                recordings = withContext(Dispatchers.IO) { recoverRecordings(settings.audioRetention) }
+                recordingNotice = recordings.latestRecordingNotice()
                 providerDraft = null
                 providerTestImage = null
                 message = "供应商配置已保存"
@@ -300,5 +358,27 @@ class DiaryViewModel(application: Application) : AndroidViewModel(application) {
         is org.json.JSONException -> "模型返回格式不正确，输入已保留"
         is IllegalArgumentException, is IllegalStateException -> e.message ?: "操作未完成，请重试"
         else -> "连接或保存失败，输入已保留，请检查网络与存储空间"
+    }
+
+    private fun recordingRepository(retention: AudioRetention): RecordingRepository =
+        RecordingRepository(getApplication(), retention)
+
+    private fun recordingScheduler(): RecordingWorkScheduler = RecordingWorkScheduler(getApplication())
+
+    private fun recoverRecordings(retention: AudioRetention): List<RecordingSegment> {
+        val repository = recordingRepository(retention)
+        val segments = repository.loadAll()
+        segments.filter { it.state.needsTranscriptionRecovery() }
+            .forEach { recordingScheduler().enqueueTranscription(it.id) }
+        repository.cleanExpiredAudio(System.currentTimeMillis())
+        return repository.loadAll()
+    }
+}
+
+private fun List<RecordingSegment>.latestRecordingNotice(): String? = maxByOrNull { it.createdAt }?.let {
+    when (it.state) {
+        RecordingState.SAVED, RecordingState.TRANSCRIBING -> "录音已收好，正在等待网络识别"
+        RecordingState.RETRYABLE_ERROR -> "这段录音稍后再试，原声已经保留"
+        RecordingState.TRANSCRIBED, RecordingState.ATTACHED_TO_DAY -> null
     }
 }

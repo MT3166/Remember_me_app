@@ -51,6 +51,7 @@ data class ModelSettings(
     val useMiniMaxSpeech: Boolean = true,
     val reuseMiniMaxKeyForSpeech: Boolean = true,
     val speechKey: String = "",
+    val audioRetention: AudioRetention = AudioRetention.FOREVER,
 ) {
     val speechKeyForRequest: String get() = if (!reuseMiniMaxKeyForSpeech) speechKey else sequenceOf(
         if (textProvider == Provider.MINIMAX) textKeyForRequest else textProfiles[Provider.MINIMAX]?.key.orEmpty(),
