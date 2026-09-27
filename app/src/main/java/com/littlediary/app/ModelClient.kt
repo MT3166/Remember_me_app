@@ -14,6 +14,12 @@ class ModelClient(private val transport: ModelTransport = HttpModelTransport) {
         return parseCorrection(raw)
     }
 
+    internal suspend fun requestStory(settings: ModelSettings, sourceText: String, final: Boolean): StoryResult {
+        val prompt = buildChildStoryPrompt(sourceText, final)
+        val raw = text(settings, prompt, "请按照系统提示整理原始素材，只输出故事结果。", clean = false)
+        return parseStoryResult(raw)
+    }
+
     suspend fun cover(settings: ModelSettings, body: String): Pair<String, ByteArray> {
         settings.normalized().requireKey(ModelKind.IMAGE)
         val scene = cleanModelText(text(settings, COVER_PROMPT, body)).take(1000)
@@ -45,13 +51,13 @@ class ModelClient(private val transport: ModelTransport = HttpModelTransport) {
         require(cleanModelText(response).isNotBlank()) { "接口没有返回文字" }
     }
 
-    private suspend fun text(settings: ModelSettings, system: String, user: String): String {
+    private suspend fun text(settings: ModelSettings, system: String, user: String, clean: Boolean = true): String {
         val s = settings.normalized()
         val key = s.requireKey(ModelKind.TEXT)
         require(user.length <= 12000) { "一篇日记最多 12000 字，请分篇保存" }
         val body = textRequest(s, system, user)
         val response = post(endpoint(s.textBaseUrl, s.protocol), key, body, s.protocol)
-        return parseText(response, s.protocol)
+        return parseText(response, s.protocol, clean)
     }
 
     private suspend fun post(
@@ -114,6 +120,10 @@ class ModelClient(private val transport: ModelTransport = HttpModelTransport) {
         }
 
         fun parseText(j: JSONObject, protocol: Protocol): String {
+            return parseText(j, protocol, clean = true)
+        }
+
+        private fun parseText(j: JSONObject, protocol: Protocol, clean: Boolean): String {
             checkApiError(j)
             val result = when (protocol) {
                 Protocol.OPENAI -> {
@@ -130,7 +140,8 @@ class ModelClient(private val transport: ModelTransport = HttpModelTransport) {
                         .filter { it.optString("type") == "text" }.joinToString("\n") { it.getString("text") }
                 }
             }
-            return cleanModelText(result).also { require(it.isNotBlank()) { "模型没有返回文字" } }
+            return (if (clean) cleanModelText(result) else result.trim())
+                .also { require(it.isNotBlank()) { "模型没有返回文字" } }
         }
 
         fun parseCorrection(raw: String): Correction {
@@ -162,3 +173,6 @@ class ModelClient(private val transport: ModelTransport = HttpModelTransport) {
         }
     }
 }
+
+suspend fun ModelClient.story(settings: ModelSettings, sourceText: String, final: Boolean): StoryResult =
+    requestStory(settings, sourceText, final)
