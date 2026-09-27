@@ -15,12 +15,13 @@ class RecordingRepository(
 
     fun dayKey(timestamp: Long): String = localDayKey(timestamp, zone)
 
-    @Synchronized
     fun insert(segment: RecordingSegment) {
-        validateId(segment.id)
-        val existing = read(segment.id)
-        if (existing != null && existing.revision >= segment.revision) return
-        persist(prepare(segment))
+        synchronized(PROCESS_LOCK) {
+            validateId(segment.id)
+            val existing = read(segment.id)
+            if (existing != null && existing.revision >= segment.revision) return
+            persist(prepare(segment))
+        }
     }
 
     @Synchronized
@@ -35,12 +36,13 @@ class RecordingRepository(
         return read(id)
     }
 
-    @Synchronized
     fun update(segment: RecordingSegment) {
-        validateId(segment.id)
-        val existing = read(segment.id)
-        if (existing != null && existing.revision >= segment.revision) return
-        persist(prepare(segment))
+        synchronized(PROCESS_LOCK) {
+            validateId(segment.id)
+            val existing = read(segment.id)
+            if (existing != null && existing.revision >= segment.revision) return
+            persist(prepare(segment))
+        }
     }
 
     fun audioFile(segment: RecordingSegment): File {
@@ -50,13 +52,14 @@ class RecordingRepository(
         return File(directory, name)
     }
 
-    @Synchronized
     fun deleteAudioIfEligible(segment: RecordingSegment, now: Long): Boolean {
-        val current = read(segment.id) ?: return false
-        val days = retention.days ?: return false
-        if (current.state != RecordingState.ATTACHED_TO_DAY || now < current.createdAt) return false
-        if (now - current.createdAt < TimeUnit.DAYS.toMillis(days)) return false
-        return audioFile(current).delete()
+        synchronized(PROCESS_LOCK) {
+            val current = read(segment.id) ?: return false
+            val days = retention.days ?: return false
+            if (current.state != RecordingState.ATTACHED_TO_DAY || now < current.createdAt) return false
+            if (now - current.createdAt < TimeUnit.DAYS.toMillis(days)) return false
+            return audioFile(current).delete()
+        }
     }
 
     private fun prepare(segment: RecordingSegment): RecordingSegment {
@@ -91,6 +94,8 @@ class RecordingRepository(
     private fun metadataFile(id: String): File = File(directory, "$id.json")
 
     companion object {
+        private val PROCESS_LOCK = Any()
+
         fun encode(segment: RecordingSegment): String = buildString {
             append('{')
             appendJsonField("id", segment.id)

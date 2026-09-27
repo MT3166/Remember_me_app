@@ -6,6 +6,8 @@ import java.io.File
 import java.nio.file.Files
 import java.time.Instant
 import java.time.ZoneId
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -73,6 +75,46 @@ class RecordingRepositoryTest {
         second.update(staleUpdate)
 
         assertEquals(firstUpdate, first.get(original.id))
+    }
+
+    @Test
+    fun concurrentRepositoriesCannotLeaveLowerRevisionAsFinalState() {
+        val context = TestContext()
+        val first = RecordingRepository(context)
+        val second = RecordingRepository(context)
+        val failure = AtomicReference<Throwable?>()
+
+        repeat(100) { attempt ->
+            val original = sampleSegment(id = "race-$attempt")
+            val higher = original.copy(state = RecordingState.TRANSCRIBING, revision = 2)
+            val lower = original.copy(state = RecordingState.RETRYABLE_ERROR, revision = 1)
+            val start = CountDownLatch(1)
+            first.insert(original)
+            val highThread = Thread {
+                try {
+                    start.await()
+                    first.update(higher)
+                } catch (error: Throwable) {
+                    failure.compareAndSet(null, error)
+                }
+            }
+            val lowThread = Thread {
+                try {
+                    start.await()
+                    second.update(lower)
+                } catch (error: Throwable) {
+                    failure.compareAndSet(null, error)
+                }
+            }
+            highThread.start()
+            lowThread.start()
+            start.countDown()
+            highThread.join()
+            lowThread.join()
+
+            assertEquals(2L, first.get(original.id)?.revision)
+        }
+        failure.get()?.let { throw it }
     }
 
     @Test
