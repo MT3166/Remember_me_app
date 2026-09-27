@@ -38,6 +38,7 @@ class DailyStoryWorkerTest {
         val attached = stories.get(segment.dayKey)
         assertEquals(listOf(segment.id), attached?.segmentIds)
         assertEquals("我今天去了公园", attached?.sourceText)
+        assertEquals(RecordingState.ATTACHED_TO_DAY, recordings.get(segment.id)?.state)
 
         assertEquals(RecordingWorkOutcome.SUCCESS, processor.process(segment.id))
         assertEquals(listOf(segment.dayKey), scheduled)
@@ -144,7 +145,10 @@ class DailyStoryWorkerTest {
     fun finalStorySchedulesCoverAndCoverFailureLeavesDefaultIllustration() = runBlocking {
         val context = TestContext()
         val stories = DailyStoryRepository(context)
-        val source = stories.appendSegment("2026-09-27", "segment-1", "我和妈妈看云", 1_000L)
+        val first = stories.appendSegment("2026-09-27", "segment-1", "我和妈妈看云", 1_000L)
+        stories.save(first.copy(coverFile = "old-cover.png"))
+        val source = stories.appendSegment("2026-09-27", "segment-2", "云朵变成小船", 2_000L)
+        assertEquals("", source.coverFile)
         val scheduledCovers = mutableListOf<String>()
         var coverCalls = 0
         val processor = DailyStoryWorkerProcessor(
@@ -176,6 +180,28 @@ class DailyStoryWorkerTest {
         assertFalse(stories.get(source.dayKey)!!.coverFile.isNotBlank())
     }
 
+    @Test
+    fun attachedRecordingCanBeCleanedAfterRetentionWindow() = runBlocking {
+        val context = TestContext()
+        val recordings = RecordingRepository(context, AudioRetention.SEVEN)
+        val stories = DailyStoryRepository(context)
+        val segment = sampleSegment(state = RecordingState.TRANSCRIBED).copy(createdAt = 0L, transcript = "已经转写")
+        recordings.insert(segment)
+        recordings.audioFile(segment).writeBytes(byteArrayOf(1, 2, 3))
+        val processor = RecordingWorkerProcessor(
+            repository = recordings,
+            settings = { ModelSettings(textKey = "test-key") },
+            transcribe = { _, _ -> error("already transcribed") },
+            dailyStoryRepository = stories,
+            enqueueDraft = {},
+        )
+
+        assertEquals(RecordingWorkOutcome.SUCCESS, processor.process(segment.id))
+        assertEquals(RecordingState.ATTACHED_TO_DAY, recordings.get(segment.id)?.state)
+        assertEquals(1, recordings.cleanExpiredAudio(8 * DAY))
+        assertFalse(recordings.audioFile(segment).exists())
+    }
+
     private fun sampleSegment(state: RecordingState) = RecordingSegment(
         id = "segment-1",
         dayKey = "2026-09-27",
@@ -192,5 +218,9 @@ class DailyStoryWorkerTest {
         override fun getFilesDir(): File = File(root, "files").apply { mkdirs() }
         override fun getCacheDir(): File = File(root, "cache").apply { mkdirs() }
         override fun getNoBackupFilesDir(): File = File(root, "no-backup").apply { mkdirs() }
+    }
+
+    companion object {
+        private const val DAY = 24 * 60 * 60 * 1000L
     }
 }

@@ -88,9 +88,15 @@ internal class RecordingWorkerProcessor(
     private fun attachToDailyStory(segment: RecordingSegment) {
         val stories = dailyStoryRepository ?: return
         val alreadyAttached = stories.get(segment.dayKey)?.segmentIds?.contains(segment.id) == true
-        if (alreadyAttached) return
-        stories.appendSegment(segment.dayKey, segment.id, segment.transcript, segment.createdAt)
-        enqueueDraft?.invoke(segment.dayKey)
+        if (!alreadyAttached) stories.appendSegment(segment.dayKey, segment.id, segment.transcript, segment.createdAt)
+        val current = repository.get(segment.id) ?: segment
+        if (current.state != RecordingState.ATTACHED_TO_DAY) {
+            repository.update(current.copy(
+                state = RecordingState.ATTACHED_TO_DAY,
+                revision = current.revision + 1,
+            ))
+        }
+        if (!alreadyAttached) enqueueDraft?.invoke(segment.dayKey)
     }
 
     private fun Throwable.isNetworkFailure(): Boolean = generateSequence(this) { it.cause }

@@ -44,3 +44,29 @@ DONE
 - `gradlew` is not executable in this worktree, so the requested wrapper commands were run equivalently with `bash ./gradlew`; no file permissions were changed.
 - Task 4 playback/UI work was intentionally not included.
 - Existing Task 1/2 and recording-queue changes, plus user-owned memory/docs changes, were preserved.
+
+## Review fix round: CHANGES REQUESTED
+
+### Changes addressed
+
+- `DiaryViewModel.load()` now schedules previous-day final work during startup recovery. `MainActivity` watches `ON_START` and calls the same scheduler only after the local day key changes, so rollover finalization does not depend on a new `RecordingWorker`.
+- Appending a new source revision clears `coverFile`. A failed cover attempt therefore leaves the default illustration state instead of exposing an older revision's cover.
+- After a successful story append, `RecordingWorker` advances the recording to `ATTACHED_TO_DAY` before scheduling draft work. Existing attached-but-not-transitioned recordings are repaired idempotently, enabling retention cleanup.
+- Added regression coverage for old-cover invalidation plus cover failure, transcription-to-attached state transition, and retention deletion after the configured window. Existing previous-day scheduler coverage verifies READY stories are skipped.
+
+### Verification
+
+- RED confirmed before the review fixes: the new regression assertions failed for stale cover retention and missing `ATTACHED_TO_DAY` transition.
+- Focused test:
+
+  `JAVA_HOME=/opt/homebrew/opt/openjdk@17 bash ./gradlew :app:testDebugUnitTest --tests com.littlediary.app.DailyStoryWorkerTest`
+
+  → 7 tests, 0 failures, 0 errors.
+
+- Full unit tests:
+
+  `JAVA_HOME=/opt/homebrew/opt/openjdk@17 bash ./gradlew :app:testDebugUnitTest`
+
+  → 84 tests, 0 failures, 0 errors.
+
+- `git diff --check` passed before the review-fix commit.

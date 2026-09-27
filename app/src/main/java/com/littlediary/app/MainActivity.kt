@@ -46,6 +46,7 @@ private fun DiaryApplication(vm: DiaryViewModel = viewModel()) {
     var tts by remember { mutableStateOf<TextToSpeech?>(null) }
     var speaking by remember { mutableStateOf(false) }
     var activeUtterance by remember { mutableStateOf<String?>(null) }
+    var lastLocalDayKey by remember { mutableStateOf(localDayKey(System.currentTimeMillis())) }
 
     fun stopReading() {
         activeUtterance = null
@@ -89,6 +90,13 @@ private fun DiaryApplication(vm: DiaryViewModel = viewModel()) {
     }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) {
+                val currentDayKey = localDayKey(System.currentTimeMillis())
+                if (currentDayKey != lastLocalDayKey) {
+                    lastLocalDayKey = currentDayKey
+                    vm.enqueueFinalForPreviousDays()
+                }
+            }
             if (event == Lifecycle.Event.ON_STOP && (context as? android.app.Activity)?.isChangingConfigurations != true) { speech.cancel(); stopReading() }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

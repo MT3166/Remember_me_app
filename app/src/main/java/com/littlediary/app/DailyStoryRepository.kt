@@ -91,6 +91,7 @@ class DailyStoryRepository(
         val story = currentStory.copy(
             segmentIds = entries.map { it.id },
             sourceText = entries.joinToString("\n") { it.text },
+            coverFile = "",
             revision = currentStory.revision + 1,
             sourceFingerprint = fingerprint(dayKey, entries),
             state = DailyStoryState.COLLECTING,

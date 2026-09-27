@@ -80,6 +80,7 @@ class DiaryViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 recordings = withContext(Dispatchers.IO) { recoverRecordings(settings.audioRetention) }
                 recordingNotice = recordings.latestRecordingNotice()
+                enqueueFinalForPreviousDays()
             } catch (_: Exception) {
                 message = "录音队列读取失败，原始录音未改动"
             }
@@ -89,6 +90,14 @@ class DiaryViewModel(application: Application) : AndroidViewModel(application) {
 
     fun notify(text: String) { message = text }
     fun dismissMessage() { message = null }
+
+    fun enqueueFinalForPreviousDays(now: Long = System.currentTimeMillis()) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                DailyStoryWorkScheduler(getApplication()).enqueueFinalForPreviousDays(now)
+            }
+        }
+    }
 
     fun finishRecording(file: File, startedAt: Long, endedAt: Long) {
         val repository = recordingRepository(settings.audioRetention)
