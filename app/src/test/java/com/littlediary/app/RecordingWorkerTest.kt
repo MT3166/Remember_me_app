@@ -6,6 +6,7 @@ import androidx.work.BackoffPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ListenableWorker
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequest
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
@@ -79,17 +80,28 @@ class RecordingWorkerTest {
     }
 
     @Test
-    fun schedulerSpecRequiresNetworkUsesExponentialBackoffAndKeepsUniqueWork() {
-        val first = RecordingWorkScheduler.workSpec("segment-42")
-        val second = RecordingWorkScheduler.workSpec("segment-42")
+    fun schedulerBuildsRealRequestAndEnqueuesStableUniqueWorkWithKeepPolicy() {
+        val names = mutableListOf<String>()
+        val policies = mutableListOf<ExistingWorkPolicy>()
+        val requests = mutableListOf<OneTimeWorkRequest>()
+        val scheduler = RecordingWorkScheduler(TestContext()) { name, policy, request ->
+            names += name
+            policies += policy
+            requests += request
+        }
 
-        assertEquals(first, second)
-        assertEquals("recording-transcription-segment-42", first.workName)
-        assertEquals("segment-42", first.segmentId)
-        assertEquals(NetworkType.CONNECTED, first.networkType)
-        assertEquals(BackoffPolicy.EXPONENTIAL, first.backoffPolicy)
-        assertEquals(30L, first.backoffDelaySeconds)
-        assertEquals(ExistingWorkPolicy.KEEP, first.existingWorkPolicy)
+        scheduler.enqueueTranscription("segment-42")
+        scheduler.enqueueTranscription("segment-42")
+
+        assertEquals(listOf("recording-transcription-segment-42", "recording-transcription-segment-42"), names)
+        assertEquals(listOf(ExistingWorkPolicy.KEEP, ExistingWorkPolicy.KEEP), policies)
+        assertEquals(2, requests.size)
+        requests.forEach { request ->
+            assertEquals(NetworkType.CONNECTED, request.workSpec.constraints.requiredNetworkType)
+            assertEquals(BackoffPolicy.EXPONENTIAL, request.workSpec.backoffPolicy)
+            assertEquals(30_000L, request.workSpec.backoffDelayDuration)
+            assertEquals("segment-42", request.workSpec.input.getString(RecordingWorker.INPUT_SEGMENT_ID))
+        }
     }
 
     @Test

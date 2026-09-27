@@ -6,49 +6,33 @@ import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OneTimeWorkRequest
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import java.util.concurrent.TimeUnit
 
-internal data class RecordingWorkSpec(
-    val workName: String,
-    val segmentId: String,
-    val networkType: NetworkType,
-    val backoffPolicy: BackoffPolicy,
-    val backoffDelaySeconds: Long,
-    val existingWorkPolicy: ExistingWorkPolicy,
-)
-
-class RecordingWorkScheduler(context: Context) {
-    private val workManager = WorkManager.getInstance(context.applicationContext)
+class RecordingWorkScheduler(
+    context: Context,
+    private val enqueue: (String, ExistingWorkPolicy, OneTimeWorkRequest) -> Unit = { name, policy, request ->
+        WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(name, policy, request)
+    },
+) {
 
     fun enqueueTranscription(segmentId: String) {
-        val spec = workSpec(segmentId)
+        require(segmentId.isNotBlank()) { "录音片段 ID 不能为空" }
         val request = OneTimeWorkRequestBuilder<RecordingWorker>()
-            .setInputData(workDataOf(RecordingWorker.INPUT_SEGMENT_ID to spec.segmentId))
+            .setInputData(workDataOf(RecordingWorker.INPUT_SEGMENT_ID to segmentId))
             .setConstraints(Constraints.Builder()
-                .setRequiredNetworkType(spec.networkType)
+                .setRequiredNetworkType(NetworkType.CONNECTED)
                 .build())
-            .setBackoffCriteria(spec.backoffPolicy, spec.backoffDelaySeconds, TimeUnit.SECONDS)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .addTag(TRANSCRIPTION_TAG)
             .build()
-        workManager.enqueueUniqueWork(spec.workName, spec.existingWorkPolicy, request)
+        enqueue(workName(segmentId), ExistingWorkPolicy.KEEP, request)
     }
 
     companion object {
         const val TRANSCRIPTION_TAG = "recording-transcription"
-
-        internal fun workSpec(segmentId: String): RecordingWorkSpec {
-            require(segmentId.isNotBlank()) { "录音片段 ID 不能为空" }
-            return RecordingWorkSpec(
-                workName = workName(segmentId),
-                segmentId = segmentId,
-                networkType = NetworkType.CONNECTED,
-                backoffPolicy = BackoffPolicy.EXPONENTIAL,
-                backoffDelaySeconds = 30,
-                existingWorkPolicy = ExistingWorkPolicy.KEEP,
-            )
-        }
 
         fun workName(segmentId: String): String = "recording-transcription-$segmentId"
     }
