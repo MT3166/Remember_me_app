@@ -4,6 +4,7 @@ import android.content.Context
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import java.time.LocalDate
 import java.time.ZoneId
 
 class DailyStoryRepository(
@@ -114,14 +115,15 @@ class DailyStoryRepository(
     }
 
     private fun readRecord(dayKey: String): PersistedStory? {
-        validateDayKey(dayKey)
-        val file = metadataFile(dayKey)
-        if (!file.exists()) return null
         return try {
+            validateDayKey(dayKey)
+            val file = metadataFile(dayKey)
+            if (!file.exists()) return null
             val json = file.readText(Charsets.UTF_8)
             val root = JsonParser(json).parseObject()
             val story = decode(root)
-            val entries = decodeSegments(root, story)
+            require(story.dayKey == dayKey) { "Story day key does not match its file" }
+            val entries = validateDecodedStory(root, story)
             PersistedStory(story, entries)
         } catch (_: Exception) {
             null
@@ -132,6 +134,7 @@ class DailyStoryRepository(
 
     private fun validateDayKey(dayKey: String) {
         require(dayKey.matches(DAY_KEY_PATTERN)) { "Invalid story day key" }
+        require(runCatching { LocalDate.parse(dayKey) }.isSuccess) { "Invalid story calendar date" }
     }
 
     private fun validateSegmentId(segmentId: String) {
@@ -152,7 +155,12 @@ class DailyStoryRepository(
 
         fun encode(story: DailyStory): String = encode(story, emptyList())
 
-        fun decode(json: String): DailyStory = decode(JsonParser(json).parseObject())
+        fun decode(json: String): DailyStory {
+            val root = JsonParser(json).parseObject()
+            val story = decode(root)
+            validateDecodedStory(root, story)
+            return story
+        }
 
         private fun decode(value: Map<String, Any?>): DailyStory {
             return DailyStory(
@@ -208,6 +216,28 @@ class DailyStoryRepository(
                     createdAt = (segment["createdAt"] as? Number)?.toLong() ?: index.toLong(),
                 )
             }
+        }
+
+        private fun validateDecodedStory(
+            root: Map<String, Any?>,
+            story: DailyStory,
+        ): List<StorySegment> {
+            val entries = decodeSegments(root, story)
+            val entryIds = entries.map { it.id }
+            require(entryIds.all { it.matches(SEGMENT_ID_PATTERN) }) { "Invalid story segment ID" }
+            require(story.segmentIds.all { it.matches(SEGMENT_ID_PATTERN) }) { "Invalid story segment ID" }
+            require(entryIds.size == entryIds.toSet().size) { "Duplicate story segment data" }
+            require(story.segmentIds.size == story.segmentIds.toSet().size) { "Duplicate story segment ID" }
+            require(story.segmentIds == entryIds) { "Story segment data does not match IDs" }
+            require(story.sourceText == entries.joinToString("\n") { it.text }) {
+                "Story source text does not match segments"
+            }
+            if (story.sourceFingerprint.isNotBlank()) {
+                require(story.sourceFingerprint == fingerprint(story.dayKey, entries)) {
+                    "Story source fingerprint does not match segments"
+                }
+            }
+            return entries
         }
 
         private fun StringBuilder.appendJsonField(name: String, value: String, last: Boolean = false) {
