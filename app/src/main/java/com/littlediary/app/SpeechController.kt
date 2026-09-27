@@ -30,6 +30,18 @@ fun interface AudioRecorderFactory {
     fun create(): AudioRecorder
 }
 
+interface RecordingScheduler {
+    fun post(runnable: Runnable): Boolean
+    fun postDelayed(runnable: Runnable, delayMillis: Long): Boolean
+    fun removeCallbacksAndMessages(token: Any?)
+}
+
+private class HandlerRecordingScheduler(private val handler: Handler) : RecordingScheduler {
+    override fun post(runnable: Runnable) = handler.post(runnable)
+    override fun postDelayed(runnable: Runnable, delayMillis: Long) = handler.postDelayed(runnable, delayMillis)
+    override fun removeCallbacksAndMessages(token: Any?) = handler.removeCallbacksAndMessages(token)
+}
+
 private class MediaAudioRecorder(private val delegate: MediaRecorder) : AudioRecorder {
     init {
         @Suppress("DEPRECATION")
@@ -55,7 +67,7 @@ class SpeechController(
         @Suppress("DEPRECATION")
         MediaAudioRecorder(MediaRecorder())
     },
-    private val handler: Handler? = Handler(Looper.getMainLooper()),
+    private val scheduler: RecordingScheduler? = HandlerRecordingScheduler(Handler(Looper.getMainLooper())),
     private val elapsedRealtime: () -> Long = { SystemClock.elapsedRealtime() },
 ) {
     var listening by mutableStateOf(false); private set
@@ -116,14 +128,14 @@ class SpeechController(
             listening = true
             startedAt = elapsedRealtime()
             recordingStartedAt = System.currentTimeMillis()
-            handler?.post(object : Runnable {
+            scheduler?.post(object : Runnable {
                 override fun run() {
                     if (generation != token || !listening) return
                     levels = levels.drop(1) + ((recorder?.maxAmplitude ?: 0) / 16000f).coerceIn(0f, 1f)
-                    handler?.postDelayed(this, 150)
+                    scheduler?.postDelayed(this, 150)
                 }
             })
-            handler?.postDelayed({ if (generation == token && listening) stopRecordingInternal() }, 480000)
+            scheduler?.postDelayed({ if (generation == token && listening) stopRecordingInternal() }, 480000)
         } catch (_: Exception) {
             recorder?.release(); recorder = null
             recordingFile?.delete(); recordingFile = null
@@ -152,7 +164,7 @@ class SpeechController(
 
     private fun stopRecordingInternal() {
         if (!listening) return
-        handler?.removeCallbacksAndMessages(null)
+        scheduler?.removeCallbacksAndMessages(null)
         val finished = finishRecording()
         if (finished == null) recordingError("录音太短，请再说一次")
         else saved(finished.file, finished.startedAt, finished.endedAt)
@@ -233,7 +245,7 @@ class SpeechController(
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
                 })
             }
-            handler?.postDelayed({ if (token == generation && active) stop(onError) }, 60000)
+            scheduler?.postDelayed({ if (token == generation && active) stop(onError) }, 60000)
         } catch (_: Exception) {
             cancel()
             onError("无法启动语音识别，可以使用键盘语音输入")
@@ -251,7 +263,7 @@ class SpeechController(
         processing = true
         recognizer?.stopListening()
         val token = generation
-        handler?.postDelayed({
+        scheduler?.postDelayed({
             if (generation == token && processing) {
                 cancel()
                 onError("语音识别等待超时，请再试一次")
@@ -263,7 +275,7 @@ class SpeechController(
         generation++
         upload?.cancel(); upload = null
         finishRecording()
-        handler?.removeCallbacksAndMessages(null)
+        scheduler?.removeCallbacksAndMessages(null)
         recognizer?.cancel()
         recognizer?.destroy()
         recognizer = null

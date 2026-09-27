@@ -45,6 +45,53 @@ class SpeechControllerTest {
 
         assertEquals(0, saved)
         assertTrue(error.contains("太短"))
+        assertTrue(recorder.outputFile != null)
+        assertTrue(!File(recorder.outputFile!!).exists())
+        controller.close()
+    }
+
+    @Test
+    fun eightMinuteTimeoutStopsAndSavesRecording() {
+        val recorder = FakeRecorder(writeAudio = true)
+        val handler = TestHandler()
+        var saved = 0
+        val controller = controller(recorder, scheduler = handler)
+
+        controller.startRecording({ _, _, _ -> saved++ }, {})
+        assertEquals(480000L, handler.delayMillis)
+        handler.delayedRunnable!!.run()
+
+        assertEquals(1, saved)
+        assertEquals(1, recorder.stopCalls)
+        assertTrue(!controller.listening)
+        controller.close()
+    }
+
+    @Test
+    fun recorderStartFailureReportsMicrophoneError() {
+        val recorder = FakeRecorder(writeAudio = true, failOnPrepare = true)
+        var error = ""
+        val controller = controller(recorder)
+
+        controller.startRecording({ _, _, _ -> }, { error = it })
+
+        assertEquals("无法开始录音，请检查麦克风权限并重试", error)
+        assertTrue(!controller.listening)
+        controller.close()
+    }
+
+    @Test
+    fun stoppingRecordingTwiceSavesAtMostOnce() {
+        val recorder = FakeRecorder(writeAudio = true)
+        var saved = 0
+        val controller = controller(recorder)
+
+        controller.startRecording({ _, _, _ -> saved++ }, {})
+        controller.stopRecording()
+        controller.stopRecording()
+
+        assertEquals(1, saved)
+        assertEquals(1, recorder.stopCalls)
         controller.close()
     }
 
@@ -64,15 +111,22 @@ class SpeechControllerTest {
         controller.close()
     }
 
-    private fun controller(recorder: FakeRecorder, client: SpeechClient = SpeechClient()) =
-        SpeechController(TestContext(), client, AudioRecorderFactory { recorder }, null) { System.currentTimeMillis() }
+    private fun controller(
+        recorder: FakeRecorder,
+        client: SpeechClient = SpeechClient(),
+        scheduler: RecordingScheduler? = null,
+    ) = SpeechController(TestContext(), client, AudioRecorderFactory { recorder }, scheduler) { System.currentTimeMillis() }
 
-    private class FakeRecorder(private val writeAudio: Boolean) : AudioRecorder {
+    private class FakeRecorder(
+        private val writeAudio: Boolean,
+        private val failOnPrepare: Boolean = false,
+    ) : AudioRecorder {
         private var output: String = ""
         var stopCalls = 0
+        val outputFile: String? get() = output.takeIf { it.isNotBlank() }
 
         override fun setOutputFile(path: String) { output = path }
-        override fun prepare() = Unit
+        override fun prepare() { if (failOnPrepare) error("permission denied") }
         override fun start() = Unit
         override fun stop() {
             stopCalls++
@@ -80,6 +134,21 @@ class SpeechControllerTest {
         }
         override fun release() = Unit
         override val maxAmplitude: Int get() = 0
+    }
+
+    private class TestHandler : RecordingScheduler {
+        var delayedRunnable: Runnable? = null
+        var delayMillis = 0L
+
+        override fun post(runnable: Runnable): Boolean = true
+        override fun postDelayed(runnable: Runnable, delayMillis: Long): Boolean {
+            delayedRunnable = runnable
+            this.delayMillis = delayMillis
+            return true
+        }
+        override fun removeCallbacksAndMessages(token: Any?) {
+            delayedRunnable = null
+        }
     }
 
     private class TestContext : ContextWrapper(null) {
