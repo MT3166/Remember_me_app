@@ -17,19 +17,61 @@ import android.media.MediaRecorder
 import java.io.File
 import kotlinx.coroutines.*
 
-class SpeechController(private val context: Context, private val client: SpeechClient = SpeechClient()) {
+interface AudioRecorder {
+    fun setOutputFile(path: String)
+    fun prepare()
+    fun start()
+    fun stop()
+    fun release()
+    val maxAmplitude: Int
+}
+
+fun interface AudioRecorderFactory {
+    fun create(): AudioRecorder
+}
+
+private class MediaAudioRecorder(private val delegate: MediaRecorder) : AudioRecorder {
+    init {
+        @Suppress("DEPRECATION")
+        delegate.setAudioSource(MediaRecorder.AudioSource.MIC)
+        delegate.setOutputFormat(MediaRecorder.OutputFormat.AAC_ADTS)
+        delegate.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+        delegate.setAudioChannels(1)
+        delegate.setAudioSamplingRate(16000)
+        delegate.setAudioEncodingBitRate(64000)
+    }
+    override fun setOutputFile(path: String) = delegate.setOutputFile(path)
+    override fun prepare() = delegate.prepare()
+    override fun start() = delegate.start()
+    override fun stop() = delegate.stop()
+    override fun release() = delegate.release()
+    override val maxAmplitude: Int get() = delegate.maxAmplitude
+}
+
+class SpeechController(
+    private val context: Context,
+    private val client: SpeechClient = SpeechClient(),
+    private val recorderFactory: AudioRecorderFactory = AudioRecorderFactory {
+        @Suppress("DEPRECATION")
+        MediaAudioRecorder(MediaRecorder())
+    },
+    private val handler: Handler? = Handler(Looper.getMainLooper()),
+    private val elapsedRealtime: () -> Long = { SystemClock.elapsedRealtime() },
+) {
     var listening by mutableStateOf(false); private set
     var processing by mutableStateOf(false); private set
     var partial by mutableStateOf(""); private set
     var startedAt by mutableStateOf(0L); private set
     var levels by mutableStateOf(List(17) { 0f }); private set
     private var recognizer: SpeechRecognizer? = null
-    private val handler = Handler(Looper.getMainLooper())
     private var generation = 0
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var upload: Job? = null
-    private var recorder: MediaRecorder? = null
+    private var recorder: AudioRecorder? = null
     private var recordingFile: File? = null
+    private var recordingStartedAt = 0L
+    private var saved: (File, Long, Long) -> Unit = { _, _, _ -> }
+    private var recordingError: (String) -> Unit = {}
     private var diaryId = ""
     private var settings = ModelSettings()
     private var deliver: (String) -> Unit = {}
@@ -48,31 +90,40 @@ class SpeechController(private val context: Context, private val client: SpeechC
         diaryId = id
         deliver = onText
         if (hasPending(id)) { transcribe(onError); return }
+        try {
+            startRecording({ file, _, _ ->
+                pending.put(diaryId, file)?.delete()
+                transcribe(onError)
+            }, onError)
+        } catch (_: Exception) {
+            cancel()
+            onError("无法开始录音，请检查麦克风权限并重试")
+        }
+    }
+
+    fun startRecording(onSaved: (File, Long, Long) -> Unit, onError: (String) -> Unit) {
+        cancel()
+        saved = onSaved
+        recordingError = onError
         val token = generation
         try {
             recordingFile = File.createTempFile("speech-", ".aac", context.cacheDir)
-            @Suppress("DEPRECATION")
-            val device = MediaRecorder()
+            val device = recorderFactory.create()
             recorder = device
-            device.setAudioSource(MediaRecorder.AudioSource.MIC)
-            device.setOutputFormat(MediaRecorder.OutputFormat.AAC_ADTS)
-            device.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            device.setAudioChannels(1)
-            device.setAudioSamplingRate(16000)
-            device.setAudioEncodingBitRate(64000)
             device.setOutputFile(recordingFile!!.absolutePath)
             device.prepare()
             device.start()
             listening = true
-            startedAt = SystemClock.elapsedRealtime()
-            handler.post(object : Runnable {
+            startedAt = elapsedRealtime()
+            recordingStartedAt = System.currentTimeMillis()
+            handler?.post(object : Runnable {
                 override fun run() {
                     if (generation != token || !listening) return
                     levels = levels.drop(1) + ((recorder?.maxAmplitude ?: 0) / 16000f).coerceIn(0f, 1f)
-                    handler.postDelayed(this, 150)
+                    handler?.postDelayed(this, 150)
                 }
             })
-            handler.postDelayed({ if (generation == token && listening) stop(onError) }, 480000)
+            handler?.postDelayed({ if (generation == token && listening) stopRecordingInternal() }, 480000)
         } catch (_: Exception) {
             recorder?.release(); recorder = null
             recordingFile?.delete(); recordingFile = null
@@ -81,17 +132,33 @@ class SpeechController(private val context: Context, private val client: SpeechC
         }
     }
 
-    private fun finishRecording(): Boolean {
-        val device = recorder ?: return false
+    private data class FinishedRecording(val file: File, val startedAt: Long, val endedAt: Long)
+
+    private fun finishRecording(): FinishedRecording? {
+        val device = recorder ?: return null
         recorder = null
         val file = recordingFile
         recordingFile = null
+        val endedAt = System.currentTimeMillis()
         val valid = try { device.stop(); file != null && file.length() > 0 } catch (_: Exception) { false }
         device.release()
         listening = false
-        if (valid && file != null) pending.put(diaryId, file)?.delete() else file?.delete()
-        return valid
+        if (!valid || file == null) {
+            file?.delete()
+            return null
+        }
+        return FinishedRecording(file, recordingStartedAt, endedAt)
     }
+
+    private fun stopRecordingInternal() {
+        if (!listening) return
+        handler?.removeCallbacksAndMessages(null)
+        val finished = finishRecording()
+        if (finished == null) recordingError("录音太短，请再说一次")
+        else saved(finished.file, finished.startedAt, finished.endedAt)
+    }
+
+    fun stopRecording() = stopRecordingInternal()
 
     private fun transcribe(onError: (String) -> Unit) {
         val file = pending[diaryId] ?: return
@@ -123,7 +190,7 @@ class SpeechController(private val context: Context, private val client: SpeechC
         cancel()
         val token = generation
         listening = true
-        startedAt = SystemClock.elapsedRealtime()
+        startedAt = elapsedRealtime()
         try {
             recognizer = SpeechRecognizer.createSpeechRecognizer(context).also { service ->
                 service.setRecognitionListener(object : RecognitionListener {
@@ -166,7 +233,7 @@ class SpeechController(private val context: Context, private val client: SpeechC
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
                 })
             }
-            handler.postDelayed({ if (token == generation && active) stop(onError) }, 60000)
+            handler?.postDelayed({ if (token == generation && active) stop(onError) }, 60000)
         } catch (_: Exception) {
             cancel()
             onError("无法启动语音识别，可以使用键盘语音输入")
@@ -175,9 +242,8 @@ class SpeechController(private val context: Context, private val client: SpeechC
 
     fun stop(onError: (String) -> Unit) {
         if (settings.useMiniMaxSpeech) {
-            if (!listening) return
-            handler.removeCallbacksAndMessages(null)
-            if (finishRecording()) transcribe(onError) else onError("录音太短，请再说一次")
+            recordingError = onError
+            stopRecordingInternal()
             return
         }
         if (!active) return
@@ -185,7 +251,7 @@ class SpeechController(private val context: Context, private val client: SpeechC
         processing = true
         recognizer?.stopListening()
         val token = generation
-        handler.postDelayed({
+        handler?.postDelayed({
             if (generation == token && processing) {
                 cancel()
                 onError("语音识别等待超时，请再试一次")
@@ -197,7 +263,7 @@ class SpeechController(private val context: Context, private val client: SpeechC
         generation++
         upload?.cancel(); upload = null
         finishRecording()
-        handler.removeCallbacksAndMessages(null)
+        handler?.removeCallbacksAndMessages(null)
         recognizer?.cancel()
         recognizer?.destroy()
         recognizer = null
