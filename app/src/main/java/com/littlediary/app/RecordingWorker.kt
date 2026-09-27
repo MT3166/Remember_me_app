@@ -1,0 +1,101 @@
+package com.littlediary.app
+
+import android.content.Context
+import androidx.work.CoroutineWorker
+import androidx.work.WorkerParameters
+import java.io.IOException
+import kotlin.coroutines.cancellation.CancellationException
+
+internal enum class RecordingWorkOutcome { SUCCESS, RETRY, FAILURE }
+
+internal class RecordingWorkerProcessor(
+    private val repository: RecordingRepository,
+    private val settings: () -> ModelSettings,
+    private val transcribe: suspend (ModelSettings, java.io.File) -> String,
+) {
+    suspend fun process(segmentId: String): RecordingWorkOutcome {
+        val segment = repository.get(segmentId) ?: return RecordingWorkOutcome.FAILURE
+        if (segment.transcript.isNotBlank() &&
+            segment.state in setOf(RecordingState.TRANSCRIBED, RecordingState.ATTACHED_TO_DAY)
+        ) {
+            return RecordingWorkOutcome.SUCCESS
+        }
+
+        val transcribing = segment.copy(
+            state = RecordingState.TRANSCRIBING,
+            error = "",
+            revision = segment.revision + 1,
+        )
+        repository.update(transcribing)
+
+        return try {
+            val transcript = transcribe(settings(), repository.audioFile(transcribing))
+            val current = repository.get(segmentId) ?: transcribing
+            if (current.transcript.isNotBlank() &&
+                current.state in setOf(RecordingState.TRANSCRIBED, RecordingState.ATTACHED_TO_DAY)
+            ) {
+                RecordingWorkOutcome.SUCCESS
+            } else {
+                repository.update(current.copy(
+                    state = RecordingState.TRANSCRIBED,
+                    transcript = transcript,
+                    error = "",
+                    revision = current.revision + 1,
+                ))
+                RecordingWorkOutcome.SUCCESS
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            val current = repository.get(segmentId) ?: transcribing
+            if (current.transcript.isNotBlank() &&
+                current.state in setOf(RecordingState.TRANSCRIBED, RecordingState.ATTACHED_TO_DAY)
+            ) {
+                return RecordingWorkOutcome.SUCCESS
+            }
+            if (error.isNetworkFailure()) {
+                repository.update(current.copy(
+                    state = RecordingState.TRANSCRIBING,
+                    error = error.message.orEmpty(),
+                    retryCount = current.retryCount + 1,
+                    revision = current.revision + 1,
+                ))
+                RecordingWorkOutcome.RETRY
+            } else {
+                repository.update(current.copy(
+                    state = RecordingState.RETRYABLE_ERROR,
+                    error = error.message ?: "语音识别配置或录音内容无效",
+                    retryCount = current.retryCount + 1,
+                    revision = current.revision + 1,
+                ))
+                RecordingWorkOutcome.FAILURE
+            }
+        }
+    }
+
+    private fun Throwable.isNetworkFailure(): Boolean = generateSequence(this) { it.cause }
+        .any { it is IOException }
+}
+
+class RecordingWorker(
+    appContext: Context,
+    workerParams: WorkerParameters,
+) : CoroutineWorker(appContext, workerParams) {
+    override suspend fun doWork(): Result {
+        val segmentId = inputData.getString(INPUT_SEGMENT_ID) ?: return Result.failure()
+        val outcome = RecordingWorkerProcessor(
+            repository = RecordingRepository(applicationContext),
+            settings = { SettingsStore(applicationContext).load() },
+            transcribe = SpeechClient()::transcribe,
+        ).process(segmentId)
+        return when (outcome) {
+            RecordingWorkOutcome.SUCCESS -> Result.success()
+            RecordingWorkOutcome.RETRY -> Result.retry()
+            RecordingWorkOutcome.FAILURE -> Result.failure()
+        }
+    }
+
+    companion object {
+        const val INPUT_SEGMENT_ID = "segment_id"
+    }
+}
