@@ -15,6 +15,7 @@
 ## Commit
 
 - `308852a feat: persist daily voice stories`
+- `fccf4df fix: harden daily story record validation`
 
 Task 2 and later pipeline work were not changed.
 
