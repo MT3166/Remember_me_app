@@ -10,24 +10,45 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import java.util.concurrent.TimeUnit
 
+internal data class RecordingWorkSpec(
+    val workName: String,
+    val segmentId: String,
+    val networkType: NetworkType,
+    val backoffPolicy: BackoffPolicy,
+    val backoffDelaySeconds: Long,
+    val existingWorkPolicy: ExistingWorkPolicy,
+)
+
 class RecordingWorkScheduler(context: Context) {
     private val workManager = WorkManager.getInstance(context.applicationContext)
 
     fun enqueueTranscription(segmentId: String) {
-        require(segmentId.isNotBlank()) { "录音片段 ID 不能为空" }
+        val spec = workSpec(segmentId)
         val request = OneTimeWorkRequestBuilder<RecordingWorker>()
-            .setInputData(workDataOf(RecordingWorker.INPUT_SEGMENT_ID to segmentId))
+            .setInputData(workDataOf(RecordingWorker.INPUT_SEGMENT_ID to spec.segmentId))
             .setConstraints(Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .setRequiredNetworkType(spec.networkType)
                 .build())
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .setBackoffCriteria(spec.backoffPolicy, spec.backoffDelaySeconds, TimeUnit.SECONDS)
             .addTag(TRANSCRIPTION_TAG)
             .build()
-        workManager.enqueueUniqueWork(workName(segmentId), ExistingWorkPolicy.KEEP, request)
+        workManager.enqueueUniqueWork(spec.workName, spec.existingWorkPolicy, request)
     }
 
     companion object {
         const val TRANSCRIPTION_TAG = "recording-transcription"
+
+        internal fun workSpec(segmentId: String): RecordingWorkSpec {
+            require(segmentId.isNotBlank()) { "录音片段 ID 不能为空" }
+            return RecordingWorkSpec(
+                workName = workName(segmentId),
+                segmentId = segmentId,
+                networkType = NetworkType.CONNECTED,
+                backoffPolicy = BackoffPolicy.EXPONENTIAL,
+                backoffDelaySeconds = 30,
+                existingWorkPolicy = ExistingWorkPolicy.KEEP,
+            )
+        }
 
         fun workName(segmentId: String): String = "recording-transcription-$segmentId"
     }

@@ -2,7 +2,9 @@ package com.littlediary.app
 
 import android.content.Context
 import androidx.work.CoroutineWorker
+import androidx.work.ListenableWorker
 import androidx.work.WorkerParameters
+import java.io.File
 import java.io.IOException
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -11,7 +13,7 @@ internal enum class RecordingWorkOutcome { SUCCESS, RETRY, FAILURE }
 internal class RecordingWorkerProcessor(
     private val repository: RecordingRepository,
     private val settings: () -> ModelSettings,
-    private val transcribe: suspend (ModelSettings, java.io.File) -> String,
+    private val transcribe: suspend (ModelSettings, File) -> String,
 ) {
     suspend fun process(segmentId: String): RecordingWorkOutcome {
         val segment = repository.get(segmentId) ?: return RecordingWorkOutcome.FAILURE
@@ -53,7 +55,7 @@ internal class RecordingWorkerProcessor(
             ) {
                 return RecordingWorkOutcome.SUCCESS
             }
-            if (error.isNetworkFailure()) {
+            if (error.isNetworkFailure() || error.isTemporaryServiceFailure()) {
                 repository.update(current.copy(
                     state = RecordingState.TRANSCRIBING,
                     error = error.message.orEmpty(),
@@ -75,6 +77,20 @@ internal class RecordingWorkerProcessor(
 
     private fun Throwable.isNetworkFailure(): Boolean = generateSequence(this) { it.cause }
         .any { it is IOException }
+
+    private fun Throwable.isTemporaryServiceFailure(): Boolean = generateSequence(this) { it.cause }
+        .mapNotNull { it.message }
+        .any { TEMPORARY_HTTP_STATUS.containsMatchIn(it) }
+
+    companion object {
+        private val TEMPORARY_HTTP_STATUS = Regex("HTTP\\s+(429|5\\d{2})\\b")
+    }
+}
+
+internal fun RecordingWorkOutcome.toWorkerResult(): ListenableWorker.Result = when (this) {
+    RecordingWorkOutcome.SUCCESS -> ListenableWorker.Result.success()
+    RecordingWorkOutcome.RETRY -> ListenableWorker.Result.retry()
+    RecordingWorkOutcome.FAILURE -> ListenableWorker.Result.failure()
 }
 
 class RecordingWorker(
@@ -88,11 +104,7 @@ class RecordingWorker(
             settings = { SettingsStore(applicationContext).load() },
             transcribe = SpeechClient()::transcribe,
         ).process(segmentId)
-        return when (outcome) {
-            RecordingWorkOutcome.SUCCESS -> Result.success()
-            RecordingWorkOutcome.RETRY -> Result.retry()
-            RecordingWorkOutcome.FAILURE -> Result.failure()
-        }
+        return outcome.toWorkerResult()
     }
 
     companion object {

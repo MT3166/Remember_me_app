@@ -2,6 +2,10 @@ package com.littlediary.app
 
 import android.content.Context
 import android.content.ContextWrapper
+import androidx.work.BackoffPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.ListenableWorker
+import androidx.work.NetworkType
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
@@ -65,6 +69,37 @@ class RecordingWorkerTest {
     }
 
     @Test
+    fun http429ServiceFailureReturnsRetryWithoutPermanentError() = runBlocking {
+        assertTemporaryServiceFailureRetries(429)
+    }
+
+    @Test
+    fun http503ServiceFailureReturnsRetryWithoutPermanentError() = runBlocking {
+        assertTemporaryServiceFailureRetries(503)
+    }
+
+    @Test
+    fun schedulerSpecRequiresNetworkUsesExponentialBackoffAndKeepsUniqueWork() {
+        val first = RecordingWorkScheduler.workSpec("segment-42")
+        val second = RecordingWorkScheduler.workSpec("segment-42")
+
+        assertEquals(first, second)
+        assertEquals("recording-transcription-segment-42", first.workName)
+        assertEquals("segment-42", first.segmentId)
+        assertEquals(NetworkType.CONNECTED, first.networkType)
+        assertEquals(BackoffPolicy.EXPONENTIAL, first.backoffPolicy)
+        assertEquals(30L, first.backoffDelaySeconds)
+        assertEquals(ExistingWorkPolicy.KEEP, first.existingWorkPolicy)
+    }
+
+    @Test
+    fun workerOutcomeMapsToWorkManagerResults() {
+        assertTrue(RecordingWorkOutcome.SUCCESS.toWorkerResult() is ListenableWorker.Result.Success)
+        assertTrue(RecordingWorkOutcome.RETRY.toWorkerResult() is ListenableWorker.Result.Retry)
+        assertTrue(RecordingWorkOutcome.FAILURE.toWorkerResult() is ListenableWorker.Result.Failure)
+    }
+
+    @Test
     fun alreadyTranscribedSegmentIsIdempotentAndDoesNotCallSpeechClient() = runBlocking {
         val context = TestContext()
         val repository = RecordingRepository(context)
@@ -123,6 +158,24 @@ class RecordingWorkerTest {
         transcript = transcript,
         revision = revision,
     )
+
+    private suspend fun assertTemporaryServiceFailureRetries(status: Int) {
+        val context = TestContext()
+        val repository = RecordingRepository(context)
+        val segment = sampleSegment()
+        repository.insert(segment)
+        repository.audioFile(segment).writeBytes(byteArrayOf(1, 2, 3))
+        val transcribe: suspend (ModelSettings, File) -> String = { _, _ ->
+            throw IllegalStateException("模型服务暂时无法完成请求（HTTP $status）")
+        }
+
+        val result = RecordingWorkerProcessor(repository, { ModelSettings(textKey = "test-key") }, transcribe)
+            .process(segment.id)
+
+        assertEquals(RecordingWorkOutcome.RETRY, result)
+        assertEquals(RecordingState.TRANSCRIBING, repository.get(segment.id)?.state)
+        assertEquals(1, repository.get(segment.id)?.retryCount)
+    }
 
     private class TestContext : ContextWrapper(null) {
         private val root = Files.createTempDirectory("recording-worker-test").toFile()
