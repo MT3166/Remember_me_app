@@ -17,7 +17,9 @@ class RecordingRecoveryTest {
 
     @Test
     fun audioRetentionNamesSupportConfiguredAndLegacyValues() {
-        assertEquals(AudioRetention.THIRTY, SettingsStore.decodeAudioRetention("THIRTY"))
+        AudioRetention.entries.forEach { retention ->
+            assertEquals(retention, SettingsStore.decodeAudioRetention(SettingsStore.encodeAudioRetention(retention)))
+        }
         assertEquals(AudioRetention.FOREVER, SettingsStore.decodeAudioRetention(""))
         assertEquals(AudioRetention.FOREVER, SettingsStore.decodeAudioRetention("unknown"))
     }
@@ -48,6 +50,63 @@ class RecordingRecoveryTest {
         assertFalse(repository.audioFile(attached).exists())
         assertTrue(repository.audioFile(pending).exists())
         assertTrue(repository.audioFile(failed).exists())
+    }
+
+    @Test
+    fun finishRecordingPersistsAudioMetadataAndEnqueuesSegment() {
+        val context = TestContext()
+        val repository = RecordingRepository(context)
+        val enqueued = mutableListOf<String>()
+        val scheduler = RecordingWorkScheduler(context) { _, _, request ->
+            enqueued += request.workSpec.input.getString(RecordingWorker.INPUT_SEGMENT_ID).orEmpty()
+        }
+        val source = File(context.getCacheDir(), "speech.aac").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val handoff = RecordingCaptureHandoff(repository, scheduler)
+
+        val segment = handoff.prepare(source, 1_000L, 2_000L)
+        handoff.finishRecording(segment)
+
+        assertEquals(segment, repository.get(segment.id))
+        assertTrue(repository.audioFile(segment).exists())
+        assertEquals(listOf(segment.id), enqueued)
+        assertFalse(source.exists())
+    }
+
+    @Test
+    fun metadataFailureLeavesDurableAudioForStartupRecovery() {
+        val context = TestContext()
+        val repository = RecordingRepository(context)
+        val scheduler = RecordingWorkScheduler(context) { _, _, _ -> Unit }
+        val source = File(context.getCacheDir(), "speech.aac").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val handoff = RecordingCaptureHandoff(repository, scheduler)
+        val segment = handoff.prepare(source, 1_000L, 2_000L)
+        File(context.getFilesDir(), "voice-diary/segments/${segment.id}.json.tmp").mkdirs()
+
+        var failed = false
+        try { handoff.finishRecording(segment) } catch (_: Exception) { failed = true }
+
+        assertTrue(failed)
+        assertTrue(repository.audioFile(segment).exists())
+        File(context.getFilesDir(), "voice-diary/segments/${segment.id}.json.tmp").delete()
+        repository.recoverOrphanAudio(3_000L)
+        assertEquals(RecordingState.SAVED, repository.get(segment.id)?.state)
+    }
+
+    @Test
+    fun enqueueFailureLeavesDurableAudioAndMetadata() {
+        val context = TestContext()
+        val repository = RecordingRepository(context)
+        val scheduler = RecordingWorkScheduler(context) { _, _, _ -> error("scheduler unavailable") }
+        val source = File(context.getCacheDir(), "speech.aac").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val handoff = RecordingCaptureHandoff(repository, scheduler)
+        val segment = handoff.prepare(source, 1_000L, 2_000L)
+
+        var failed = false
+        try { handoff.finishRecording(segment) } catch (_: Exception) { failed = true }
+
+        assertTrue(failed)
+        assertEquals(segment, repository.get(segment.id))
+        assertTrue(repository.audioFile(segment).exists())
     }
 
     private fun sampleSegment(id: String, state: RecordingState, createdAt: Long) = RecordingSegment(

@@ -61,7 +61,7 @@ class SettingsStore(context: Context, storageName: String = "model-settings.enc"
                 put("useMiniMaxSpeech", s.useMiniMaxSpeech)
                 put("reuseMiniMaxKeyForSpeech", s.reuseMiniMaxKeyForSpeech)
                 put("speechKey", s.speechKey)
-                put("audioRetention", s.audioRetention.name)
+                put("audioRetention", encodeAudioRetention(s.audioRetention))
                 put("protocol", s.protocol.name); put("textBaseUrl", s.textBaseUrl)
                 put("textModel", s.textModel); put("textKey", s.textKey)
                 put("imageUrl", s.imageUrl); put("imageModel", s.imageModel); put("imageKey", s.imageKey)
@@ -112,5 +112,7 @@ class SettingsStore(context: Context, storageName: String = "model-settings.enc"
 
         internal fun decodeAudioRetention(value: String): AudioRetention =
             runCatching { AudioRetention.valueOf(value) }.getOrDefault(AudioRetention.FOREVER)
+
+        internal fun encodeAudioRetention(value: AudioRetention): String = value.name
     }
 }

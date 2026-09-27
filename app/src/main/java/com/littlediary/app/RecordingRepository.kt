@@ -2,6 +2,7 @@ package com.littlediary.app
 
 import android.content.Context
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.time.ZoneId
 import java.util.concurrent.TimeUnit
@@ -50,6 +51,45 @@ class RecordingRepository(
         val name = File(segment.audioFile).name
         require(name.isNotBlank() && name != "." && name != "..")
         return File(directory, name)
+    }
+
+    fun persistAudio(source: File, id: String): File = synchronized(PROCESS_LOCK) {
+        validateId(id)
+        require(source.isFile && source.length() > 0) { "录音文件不存在或为空" }
+        val target = File(directory, "$id.aac")
+        if (source.absoluteFile == target.absoluteFile) return@synchronized target
+        val temporary = File(directory, ".${target.name}.tmp")
+        FileInputStream(source).use { input ->
+            FileOutputStream(temporary).use { output ->
+                input.copyTo(output)
+                output.fd.sync()
+            }
+        }
+        check(temporary.renameTo(target)) { "Unable to atomically save recording audio" }
+        check(target.length() > 0) { "Unable to save recording audio" }
+        source.delete()
+        target
+    }
+
+    fun recoverOrphanAudio(now: Long): List<RecordingSegment> = synchronized(PROCESS_LOCK) {
+        val knownIds = loadAll().mapTo(mutableSetOf()) { it.id }
+        directory.listFiles().orEmpty()
+            .filter { it.name.matches(Regex("[a-zA-Z0-9-]+\\.aac")) }
+            .forEach { file ->
+                val id = file.name.removeSuffix(".aac")
+                if (id !in knownIds && file.length() > 0) {
+                    val timestamp = file.lastModified().takeIf { it > 0 } ?: now
+                    persist(RecordingSegment(
+                        id = id,
+                        dayKey = dayKey(timestamp),
+                        createdAt = timestamp,
+                        startedAt = timestamp,
+                        endedAt = timestamp,
+                        audioFile = file.name,
+                    ))
+                }
+            }
+        loadAll()
     }
 
     fun deleteAudioIfEligible(segment: RecordingSegment, now: Long): Boolean {

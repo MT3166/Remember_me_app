@@ -15,7 +15,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.SocketTimeoutException
-import java.util.UUID
 
 class DiaryViewModel(application: Application) : AndroidViewModel(application) {
     val speech = SpeechController(application)
@@ -92,25 +91,18 @@ class DiaryViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissMessage() { message = null }
 
     fun finishRecording(file: File, startedAt: Long, endedAt: Long) {
-        val segment = RecordingSegment(
-            id = UUID.randomUUID().toString(),
-            dayKey = localDayKey(startedAt),
-            createdAt = endedAt,
-            startedAt = startedAt,
-            endedAt = endedAt,
-            audioFile = file.absolutePath,
-        )
+        val repository = recordingRepository(settings.audioRetention)
+        val handoff = RecordingCaptureHandoff(repository, recordingScheduler())
+        val segment = try { handoff.prepare(file, startedAt, endedAt) } catch (_: Exception) {
+            recordingNotice = "录音保存失败，请重试"
+            message = "录音保存失败，请检查存储空间后重试"
+            return
+        }
         viewModelScope.launch {
             try {
-                val saved = withContext(Dispatchers.IO) {
-                    val repository = recordingRepository(settings.audioRetention)
-                    repository.insert(segment)
-                    repository.cleanExpiredAudio(System.currentTimeMillis())
-                    repository.get(segment.id) ?: error("录音元数据保存失败")
-                }
-                recordingScheduler().enqueueTranscription(saved.id)
-                file.delete()
-                recordings = withContext(Dispatchers.IO) { recordingRepository(settings.audioRetention).loadAll() }
+                handoff.finishRecording(segment)
+                withContext(Dispatchers.IO) { repository.cleanExpiredAudio(System.currentTimeMillis()) }
+                recordings = withContext(Dispatchers.IO) { repository.loadAll() }
                 recordingNotice = "录音已收好，正在等待识别"
                 message = "收好啦"
             } catch (_: Exception) {
@@ -367,7 +359,7 @@ class DiaryViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun recoverRecordings(retention: AudioRetention): List<RecordingSegment> {
         val repository = recordingRepository(retention)
-        val segments = repository.loadAll()
+        val segments = repository.recoverOrphanAudio(System.currentTimeMillis())
         segments.filter { it.state.needsTranscriptionRecovery() }
             .forEach { recordingScheduler().enqueueTranscription(it.id) }
         repository.cleanExpiredAudio(System.currentTimeMillis())
