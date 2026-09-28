@@ -37,14 +37,23 @@ internal class DailyStoryWorkerProcessor(
         expectedRevision: Long,
         expectedFingerprint: String,
         type: DailyStoryWorkType,
+        expectedFinalFingerprint: String? = null,
+        expectedCoverFile: String? = null,
     ): DailyStoryWorkOutcome {
         if (type == DailyStoryWorkType.COVER) {
-            return processCover(dayKey, expectedRevision, expectedFingerprint)
+            return processCover(dayKey, expectedRevision, expectedFingerprint, expectedFinalFingerprint, expectedCoverFile)
         }
         val current = repository.get(dayKey) ?: return DailyStoryWorkOutcome.FAILURE
         if (!current.matches(expectedRevision, expectedFingerprint) || current.sourceText.isBlank()) {
             return DailyStoryWorkOutcome.SUCCESS
         }
+        if (type == DailyStoryWorkType.DRAFT && current.state != DailyStoryState.COLLECTING) {
+            return DailyStoryWorkOutcome.SUCCESS
+        }
+        if (type == DailyStoryWorkType.FINAL && current.state == DailyStoryState.READY) {
+            return DailyStoryWorkOutcome.SUCCESS
+        }
+        val expectedState = current.state
 
         return try {
             val result = generateStory(settings(), current.sourceText, type == DailyStoryWorkType.FINAL)
@@ -61,7 +70,13 @@ internal class DailyStoryWorkerProcessor(
                     state = DailyStoryState.DRAFT_READY,
                 )
             }
-            if (!repository.replaceIfCurrent(dayKey, expectedRevision, expectedFingerprint, replacement)) {
+            if (!repository.replaceIfCurrent(
+                dayKey,
+                expectedRevision,
+                expectedFingerprint,
+                replacement,
+                expectedState = expectedState,
+            )) {
                 DailyStoryWorkOutcome.SUCCESS
             } else {
                 if (type == DailyStoryWorkType.FINAL) enqueueCover(replacement)
@@ -78,9 +93,16 @@ internal class DailyStoryWorkerProcessor(
         dayKey: String,
         expectedRevision: Long,
         expectedFingerprint: String,
+        expectedFinalFingerprint: String? = null,
+        expectedCoverFile: String? = null,
     ): DailyStoryWorkOutcome {
         val current = repository.get(dayKey) ?: return DailyStoryWorkOutcome.FAILURE
         if (!current.matches(expectedRevision, expectedFingerprint) || current.finalBody.isBlank()) {
+            return DailyStoryWorkOutcome.SUCCESS
+        }
+        val finalFingerprint = expectedFinalFingerprint ?: DailyStoryRepository.finalFingerprint(current)
+        val coverFile = expectedCoverFile ?: current.coverFile
+        if (DailyStoryRepository.finalFingerprint(current) != finalFingerprint || current.coverFile != coverFile) {
             return DailyStoryWorkOutcome.SUCCESS
         }
 
@@ -90,7 +112,15 @@ internal class DailyStoryWorkerProcessor(
             val name = writeCover(current, bytes)
             require(name.isNotBlank()) { "封面文件为空" }
             val replacement = current.copy(coverFile = name)
-            if (!repository.replaceIfCurrent(dayKey, expectedRevision, expectedFingerprint, replacement)) {
+            if (!repository.replaceIfCurrent(
+                dayKey,
+                expectedRevision,
+                expectedFingerprint,
+                replacement,
+                expectedState = DailyStoryState.READY,
+                expectedFinalFingerprint = finalFingerprint,
+                expectedCoverFile = coverFile,
+            )) {
                 deleteCover(name)
             }
             DailyStoryWorkOutcome.SUCCESS
@@ -142,13 +172,22 @@ class DailyStoryWorker(
             enqueueCover = { scheduler.enqueueCover(it.dayKey) },
             writeCover = { story, bytes -> writeCoverFile(applicationContext, story, bytes) },
             deleteCover = { name -> File(applicationContext.filesDir, "voice-diary/stories/$name").delete() },
-        ).process(dayKey, revision, fingerprint, type).toWorkerResult()
+        ).process(
+            dayKey,
+            revision,
+            fingerprint,
+            type,
+            inputData.getString(INPUT_EXPECTED_FINAL_FINGERPRINT)?.takeIf { it.isNotBlank() },
+            inputData.getString(INPUT_EXPECTED_COVER_FILE),
+        ).toWorkerResult()
     }
 
     companion object {
         const val INPUT_DAY_KEY = "day_key"
         const val INPUT_EXPECTED_REVISION = "expected_revision"
         const val INPUT_EXPECTED_FINGERPRINT = "expected_fingerprint"
+        const val INPUT_EXPECTED_FINAL_FINGERPRINT = "expected_final_fingerprint"
+        const val INPUT_EXPECTED_COVER_FILE = "expected_cover_file"
         const val INPUT_WORK_TYPE = "work_type"
 
         private fun writeCoverFile(context: Context, story: DailyStory, bytes: ByteArray): String {

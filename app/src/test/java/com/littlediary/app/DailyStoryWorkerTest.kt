@@ -97,6 +97,86 @@ class DailyStoryWorkerTest {
     }
 
     @Test
+    fun lateFinalWithSameSourceRevisionCannotOverwriteNewFinal() = runBlocking {
+        val context = TestContext()
+        val stories = DailyStoryRepository(context)
+        val source = stories.appendSegment("2026-09-27", "segment-1", "原始素材", 1_000L)
+        var result = StoryResult("新标题", "新正文")
+        val processor = DailyStoryWorkerProcessor(
+            repository = stories,
+            settings = { ModelSettings(textKey = "test-key") },
+            generateStory = { _, _, _ -> result },
+            generateCover = { _, _ -> error("不应生成封面") },
+        )
+
+        assertEquals(DailyStoryWorkOutcome.SUCCESS, processor.process(
+            source.dayKey, source.revision, source.sourceFingerprint, final = true,
+        ))
+        result = StoryResult("旧标题", "旧正文")
+        assertEquals(DailyStoryWorkOutcome.SUCCESS, processor.process(
+            source.dayKey, source.revision, source.sourceFingerprint, final = true,
+        ))
+
+        assertEquals("新标题", stories.get(source.dayKey)?.finalTitle)
+        assertEquals("新正文", stories.get(source.dayKey)?.finalBody)
+    }
+
+    @Test
+    fun lateDraftCannotMoveReadyStoryBackToDraftReady() = runBlocking {
+        val context = TestContext()
+        val stories = DailyStoryRepository(context)
+        val source = stories.appendSegment("2026-09-27", "segment-1", "原始素材", 1_000L)
+        val processor = DailyStoryWorkerProcessor(
+            repository = stories,
+            settings = { ModelSettings(textKey = "test-key") },
+            generateStory = { _, _, final ->
+                if (final) StoryResult("最终标题", "最终正文") else StoryResult("迟到草稿", "迟到草稿正文")
+            },
+            generateCover = { _, _ -> error("不应生成封面") },
+        )
+
+        processor.process(source.dayKey, source.revision, source.sourceFingerprint, final = true)
+        processor.process(source.dayKey, source.revision, source.sourceFingerprint, final = false)
+
+        val current = stories.get(source.dayKey)!!
+        assertEquals(DailyStoryState.READY, current.state)
+        assertEquals("最终正文", current.finalBody)
+        assertEquals("", current.draftBody)
+    }
+
+    @Test
+    fun lateCoverForPreviousFinalContentIsDiscarded() = runBlocking {
+        val context = TestContext()
+        val stories = DailyStoryRepository(context)
+        val source = stories.appendSegment("2026-09-27", "segment-1", "原始素材", 1_000L)
+        val processor = DailyStoryWorkerProcessor(
+            repository = stories,
+            settings = { ModelSettings(textKey = "test-key") },
+            generateStory = { _, _, _ -> StoryResult("新标题", "新正文") },
+            generateCover = { _, _ -> "old-prompt" to byteArrayOf(1, 2, 3) },
+            writeCover = { _, _ -> "old-cover.png" },
+        )
+
+        processor.process(source.dayKey, source.revision, source.sourceFingerprint, final = true)
+        val current = stories.get(source.dayKey)!!
+        val oldFinal = current.copy(finalTitle = "旧标题", finalBody = "旧正文")
+        val oldFinalFingerprint = DailyStoryRepository.finalFingerprint(oldFinal)
+
+        assertEquals(
+            DailyStoryWorkOutcome.SUCCESS,
+            processor.processCover(
+                current.dayKey,
+                current.revision,
+                current.sourceFingerprint,
+                expectedFinalFingerprint = oldFinalFingerprint,
+                expectedCoverFile = "",
+            ),
+        )
+        assertEquals("新正文", stories.get(source.dayKey)?.finalBody)
+        assertEquals("", stories.get(source.dayKey)?.coverFile)
+    }
+
+    @Test
     fun startupFinalizationOnlyEnqueuesPreviousDaysThatAreNotReady() {
         val context = TestContext()
         val stories = DailyStoryRepository(context)
@@ -124,7 +204,7 @@ class DailyStoryWorkerTest {
                 draftBody = "上一版正文",
                 finalTitle = "可播放标题",
                 finalBody = "可播放正文",
-                state = DailyStoryState.READY,
+                state = DailyStoryState.DRAFT_READY,
             )
         stories.save(previous)
         val processor = DailyStoryWorkerProcessor(

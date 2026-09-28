@@ -70,3 +70,20 @@ DONE
   → 84 tests, 0 failures, 0 errors.
 
 - `git diff --check` passed before the review-fix commit.
+
+## Concurrency review fix
+
+- `replaceIfCurrent` now compares the captured source revision/fingerprint together with the expected story state, preventing same-source late draft/final results from replacing a newer result.
+- Draft work only accepts `COLLECTING`; final work skips already `READY` stories and both paths re-check the captured state atomically before persisting.
+- Cover work carries and validates the final-content fingerprint and prior cover filename. A late cover result is discarded when the saved final or cover state has changed.
+- Added regression tests for an old final after a new final, a late draft after `READY`, and a late cover for a previous final.
+
+Verification:
+
+`JAVA_HOME=/opt/homebrew/opt/openjdk@17 bash ./gradlew :app:testDebugUnitTest --tests com.littlediary.app.DailyStoryWorkerTest`
+
+→ 10 tests, 0 failures, 0 errors.
+
+`JAVA_HOME=/opt/homebrew/opt/openjdk@17 bash ./gradlew :app:testDebugUnitTest :app:assembleDebug`
+
+→ build successful; 97 tests, 0 failures, 0 errors; `assembleDebug` passed.

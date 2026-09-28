@@ -32,7 +32,14 @@ class DailyStoryWorkScheduler(
     fun enqueueCover(dayKey: String) {
         val story = stories.get(dayKey) ?: return
         if (story.state != DailyStoryState.READY || story.finalBody.isBlank()) return
-        enqueueStory(dayKey, DailyStoryWorkType.COVER, ExistingWorkPolicy.KEEP, 0L)
+        enqueueStory(
+            dayKey,
+            DailyStoryWorkType.COVER,
+            ExistingWorkPolicy.KEEP,
+            0L,
+            DailyStoryRepository.finalFingerprint(story),
+            story.coverFile,
+        )
     }
 
     fun enqueueFinalForPreviousDays(now: Long = System.currentTimeMillis()) {
@@ -48,6 +55,8 @@ class DailyStoryWorkScheduler(
         type: DailyStoryWorkType,
         policy: ExistingWorkPolicy,
         delayMs: Long,
+        expectedFinalFingerprint: String = "",
+        expectedCoverFile: String = "",
     ) {
         require(dayKey.isNotBlank()) { "故事日期不能为空" }
         val story = stories.get(dayKey) ?: return
@@ -56,6 +65,8 @@ class DailyStoryWorkScheduler(
                 DailyStoryWorker.INPUT_DAY_KEY to dayKey,
                 DailyStoryWorker.INPUT_EXPECTED_REVISION to story.revision,
                 DailyStoryWorker.INPUT_EXPECTED_FINGERPRINT to story.sourceFingerprint,
+                DailyStoryWorker.INPUT_EXPECTED_FINAL_FINGERPRINT to expectedFinalFingerprint,
+                DailyStoryWorker.INPUT_EXPECTED_COVER_FILE to expectedCoverFile,
                 DailyStoryWorker.INPUT_WORK_TYPE to type.name,
             ))
             .setConstraints(Constraints.Builder()

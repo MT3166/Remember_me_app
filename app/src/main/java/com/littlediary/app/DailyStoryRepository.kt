@@ -62,12 +62,20 @@ class DailyStoryRepository(
         expectedRevision: Long,
         expectedFingerprint: String,
         replacement: DailyStory,
+        expectedState: DailyStoryState? = null,
+        expectedFinalFingerprint: String? = null,
+        expectedCoverFile: String? = null,
     ): Boolean = synchronized(PROCESS_LOCK) {
         require(dayKey == replacement.dayKey) { "Story day key mismatch" }
         val current = readRecord(dayKey)?.story ?: return@synchronized false
         if (current.revision != expectedRevision || current.sourceFingerprint != expectedFingerprint) {
             return@synchronized false
         }
+        if (expectedState != null && current.state != expectedState) return@synchronized false
+        if (expectedFinalFingerprint != null && finalFingerprint(current) != expectedFinalFingerprint) {
+            return@synchronized false
+        }
+        if (expectedCoverFile != null && current.coverFile != expectedCoverFile) return@synchronized false
         if (replacement.revision < current.revision) return@synchronized false
         persist(replacement, readRecord(dayKey)?.segments.orEmpty())
         true
@@ -289,6 +297,15 @@ class DailyStoryRepository(
                 digest.update(segment.createdAt.toString().toByteArray(Charsets.UTF_8))
                 digest.update(0)
                 digest.update(segment.text.toByteArray(Charsets.UTF_8))
+                digest.update(0)
+            }
+            return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+        }
+
+        fun finalFingerprint(story: DailyStory): String {
+            val digest = MessageDigest.getInstance("SHA-256")
+            listOf(story.revision, story.sourceFingerprint, story.finalTitle, story.finalBody).forEach { value ->
+                digest.update(value.toString().toByteArray(Charsets.UTF_8))
                 digest.update(0)
             }
             return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
