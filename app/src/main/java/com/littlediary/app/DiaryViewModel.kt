@@ -21,6 +21,7 @@ class DiaryViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() { speech.close(); super.onCleared() }
     val store = DiaryStore(application)
     private val settingsStore = SettingsStore(application)
+    private val dailyStoryStore = DailyStoryRepository(application)
     private val client = ModelClient()
     private val writes = Channel<Diary>(Channel.UNLIMITED)
     private var operation: Job? = null
@@ -47,6 +48,8 @@ class DiaryViewModel(application: Application) : AndroidViewModel(application) {
     val hasUnsavedProviderChanges: Boolean get() = providerDraft?.let {
         it.normalized().rememberProfiles() != settings.normalized().rememberProfiles()
     } ?: false
+
+    fun dailyStory(dayKey: String): DailyStory? = dailyStoryStore.get(dayKey)
 
     init {
         viewModelScope.launch {

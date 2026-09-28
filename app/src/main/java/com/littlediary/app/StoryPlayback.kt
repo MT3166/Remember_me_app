@@ -31,12 +31,39 @@ internal interface StoryAudioPlayer {
     fun release()
 }
 
+internal class StorySpeechSession {
+    private var currentToken: String? = null
+
+    fun begin(token: String) {
+        currentToken = token
+    }
+
+    fun callbackToken(utteranceId: String?, terminal: Boolean = false): String? {
+        val token = currentToken ?: return null
+        if (utteranceId == null || !utteranceId.startsWith("$token-")) return null
+        if (terminal && !utteranceId.endsWith("-end")) return null
+        return token
+    }
+
+    fun isCurrent(token: String, utteranceId: String?, terminal: Boolean = false): Boolean =
+        callbackToken(utteranceId, terminal) == token
+
+    fun finish(token: String) {
+        if (currentToken == token) currentToken = null
+    }
+
+    fun clear() {
+        currentToken = null
+    }
+}
+
 internal class StoryPlaybackController(
     private val speech: StorySpeech,
-    private val playerFactory: (String, () -> Unit) -> StoryAudioPlayer,
+    private val playerFactory: (String, () -> Unit, () -> Unit) -> StoryAudioPlayer,
     private val fallbackSegments: (DailyStory) -> List<RecordingSegment> = { emptyList() },
     private val audioPath: (RecordingSegment) -> String = { it.audioFile },
     private val onPlaybackChanged: (Boolean) -> Unit = {},
+    private val onPlaybackError: (String) -> Unit = {},
 ) : StoryPlayback {
     private val pendingSegments = ArrayDeque<RecordingSegment>()
     private var activePlayer: StoryAudioPlayer? = null
@@ -91,13 +118,15 @@ internal class StoryPlaybackController(
 
         lateinit var player: StoryAudioPlayer
         player = try {
-            playerFactory(audioPath(segment)) {
-                if (activePlayer === player) {
+            playerFactory(
+                audioPath(segment),
+                { if (activePlayer === player) {
                     activePlayer = null
                     player.release()
                     playNextSegment()
-                }
-            }
+                } },
+                { handlePlayerError(player) },
+            )
         } catch (_: Exception) {
             playNextSegment()
             return
@@ -106,13 +135,25 @@ internal class StoryPlaybackController(
         try {
             player.prepare()
             player.start()
-            onPlaybackChanged(true)
+            if (activePlayer === player) onPlaybackChanged(true)
         } catch (_: Exception) {
-            if (activePlayer === player) activePlayer = null
-            runCatching { player.stop() }
-            player.release()
-            playNextSegment()
+            if (activePlayer === player) {
+                activePlayer = null
+                runCatching { player.stop() }
+                player.release()
+                playNextSegment()
+            }
         }
+    }
+
+    private fun handlePlayerError(player: StoryAudioPlayer) {
+        if (activePlayer !== player) return
+        activePlayer = null
+        pendingSegments.clear()
+        runCatching { player.stop() }
+        player.release()
+        onPlaybackChanged(false)
+        onPlaybackError("原始录音暂时无法播放")
     }
 }
 
@@ -128,8 +169,8 @@ class AndroidStoryPlayback(
     init {
         controller = StoryPlaybackController(
             speech = speech,
-            playerFactory = { path, onComplete ->
-                AndroidStoryAudioPlayer(path, onComplete) { onError("原始录音暂时无法播放") }
+            playerFactory = { path, onComplete, onPlayerError ->
+                AndroidStoryAudioPlayer(path, onComplete, onPlayerError)
             },
             fallbackSegments = { story ->
                 val ids = story.segmentIds.toSet()
@@ -137,6 +178,7 @@ class AndroidStoryPlayback(
             },
             audioPath = recordingRepository::audioFilePath,
             onPlaybackChanged = onPlaybackChanged,
+            onPlaybackError = onError,
         )
     }
 
@@ -158,6 +200,7 @@ private class AndroidStorySpeech(
     private val onError: (String) -> Unit,
 ) : StorySpeech {
     private val main = Handler(Looper.getMainLooper())
+    private val session = StorySpeechSession()
     private var ready = false
     private lateinit var engine: TextToSpeech
 
@@ -171,14 +214,24 @@ private class AndroidStorySpeech(
         engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) = Unit
             override fun onDone(utteranceId: String?) {
-                if (utteranceId?.endsWith("-end") == true) main.post { onPlaybackChanged(false) }
+                val token = session.callbackToken(utteranceId, terminal = true) ?: return
+                main.post {
+                    if (session.isCurrent(token, utteranceId, terminal = true)) {
+                        session.finish(token)
+                        onPlaybackChanged(false)
+                    }
+                }
             }
 
             @Deprecated("Platform callback")
             override fun onError(utteranceId: String?) {
+                val token = session.callbackToken(utteranceId) ?: return
                 main.post {
-                    onPlaybackChanged(false)
-                    onError("朗读暂时不可用，请检查设备的中文音色")
+                    if (session.isCurrent(token, utteranceId)) {
+                        session.finish(token)
+                        onPlaybackChanged(false)
+                        onError("朗读暂时不可用，请检查设备的中文音色")
+                    }
                 }
             }
         })
@@ -186,11 +239,13 @@ private class AndroidStorySpeech(
 
     override fun speak(text: String) {
         if (!ready) {
+            session.clear()
             onPlaybackChanged(false)
             onError("当前设备没有可用的中文朗读音色")
             return
         }
         val token = UUID.randomUUID().toString()
+        session.begin(token)
         val chunks = splitForSpeech(text, TextToSpeech.getMaxSpeechInputLength() - 1)
         chunks.forEachIndexed { index, chunk ->
             val id = "$token-${if (index == chunks.lastIndex) "end" else index}"
@@ -203,8 +258,8 @@ private class AndroidStorySpeech(
         }
     }
 
-    override fun pause() { engine.stop() }
-    override fun stop() { engine.stop() }
+    override fun pause() { session.clear(); engine.stop() }
+    override fun stop() { session.clear(); engine.stop() }
 
     fun close() {
         engine.stop()

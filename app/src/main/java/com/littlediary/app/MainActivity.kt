@@ -25,6 +25,29 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+internal fun storyForPlayback(
+    diary: Diary,
+    stage: DiaryStage,
+    currentStory: DailyStory?,
+    recordings: List<RecordingSegment>,
+): DailyStory {
+    val dayKey = localDayKey(diary.createdAt)
+    val body = if (stage == DiaryStage.REVIEW) diary.reviewBody else diary.body
+    val story = currentStory?.takeIf { it.dayKey == dayKey } ?: DailyStory(dayKey = dayKey)
+    val segmentIds = story.segmentIds.ifEmpty {
+        recordings.asSequence()
+            .filter { it.dayKey == dayKey }
+            .sortedWith(compareBy<RecordingSegment> { it.startedAt }.thenBy { it.id })
+            .map { it.id }
+            .toList()
+    }
+    return story.copy(
+        dayKey = dayKey,
+        segmentIds = segmentIds,
+        finalBody = body.ifBlank { story.finalBody },
+    )
+}
+
 @Composable
 private fun DiaryApplication(vm: DiaryViewModel = viewModel()) {
     val context = LocalContext.current
@@ -106,11 +129,10 @@ private fun DiaryApplication(vm: DiaryViewModel = viewModel()) {
 
     fun readDiary() {
         speech.cancel()
-        val text = if (vm.stage == DiaryStage.REVIEW) vm.selected?.reviewBody.orEmpty() else vm.selected?.body.orEmpty()
-        if (text.isBlank()) return
-        stopReading()
         val diary = vm.selected ?: return
-        storyPlayback.playStory(DailyStory(dayKey = localDayKey(diary.createdAt), finalBody = text))
+        stopReading()
+        val dayKey = localDayKey(diary.createdAt)
+        storyPlayback.playStory(storyForPlayback(diary, vm.stage, vm.dailyStory(dayKey), vm.recordings))
     }
     BackHandler(enabled = settingsOpen || vm.selectedId != null) { back() }
 

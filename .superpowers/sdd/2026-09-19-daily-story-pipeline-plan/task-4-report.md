@@ -39,3 +39,16 @@ DONE
 
 - `gradlew` is not executable in this worktree, so the requested wrapper commands were run equivalently with `bash ./gradlew`; no file permissions were changed.
 - The implementation commit includes only `StoryPlayback.kt`, `MainActivity.kt`, and `StoryPlaybackTest.kt`. Existing MEMORY/docs and Task 1–3/recording-queue changes were preserved.
+
+## Post-review playback repair
+
+- Bound TTS completion/error callbacks to a per-playback session token and utterance id, so callbacks from an older story cannot end or fail a newer story.
+- On `MediaPlayer` errors, stopped and released the active player, cleared pending segments, ended playback, and surfaced the existing playback error message.
+- Passed the selected `DailyStory` segmentIds through `MainActivity`; when no story body is available, current-day recording ids are supplied so playback reaches the real AAC fallback.
+- Added regression coverage for stale TTS callbacks, MediaPlayer cleanup/error completion, and DailyStory segment id propagation.
+
+## Post-review verification
+
+- Focused `StoryPlaybackTest`: 10 tests passed.
+- `JAVA_HOME=/opt/homebrew/opt/openjdk@17 bash ./gradlew :app:testDebugUnitTest`: 90 tests passed.
+- `JAVA_HOME=/opt/homebrew/opt/openjdk@17 bash ./gradlew :app:assembleDebug`: succeeded.
