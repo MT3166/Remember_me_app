@@ -87,3 +87,15 @@ Verification:
 `JAVA_HOME=/opt/homebrew/opt/openjdk@17 bash ./gradlew :app:testDebugUnitTest :app:assembleDebug`
 
 → build successful; 97 tests, 0 failures, 0 errors; `assembleDebug` passed.
+
+## Final concurrency and cover cleanup review
+
+- Reworked the old-final, late-draft, and late-cover tests to use `CompletableDeferred` barriers. Each stale worker now passes its initial checks and suspends inside model generation before a competing worker commits the newer story/cover state; releasing the stale worker verifies the repository CAS rejects it.
+- Cover writes now return whether this worker created the file. Cleanup after a write/CAS failure only deletes files created by this worker and only when the current story does not reference that filename, preserving a same-name file committed by another worker.
+- Added a same-name cover race regression test.
+
+Verification:
+
+`JAVA_HOME=/opt/homebrew/opt/openjdk@17 bash ./gradlew :app:testDebugUnitTest --tests com.littlediary.app.DailyStoryWorkerTest`
+
+→ 10 tests, 0 failures, 0 errors.

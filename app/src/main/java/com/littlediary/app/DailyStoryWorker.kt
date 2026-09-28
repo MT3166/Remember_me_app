@@ -13,13 +13,18 @@ internal enum class DailyStoryWorkType { DRAFT, FINAL, COVER }
 
 internal enum class DailyStoryWorkOutcome { SUCCESS, RETRY, FAILURE }
 
+internal data class CoverFileWrite(
+    val name: String,
+    val created: Boolean,
+)
+
 internal class DailyStoryWorkerProcessor(
     private val repository: DailyStoryRepository,
     private val settings: () -> ModelSettings,
     private val generateStory: suspend (ModelSettings, String, Boolean) -> StoryResult,
     private val generateCover: suspend (ModelSettings, String) -> Pair<String, ByteArray>,
     private val enqueueCover: (DailyStory) -> Unit = {},
-    private val writeCover: (DailyStory, ByteArray) -> String = { _, _ -> "" },
+    private val writeCover: (DailyStory, ByteArray) -> CoverFileWrite = { _, _ -> CoverFileWrite("", false) },
     private val deleteCover: (String) -> Unit = {},
 ) {
     suspend fun process(
@@ -106,12 +111,13 @@ internal class DailyStoryWorkerProcessor(
             return DailyStoryWorkOutcome.SUCCESS
         }
 
+        var written: CoverFileWrite? = null
         return try {
             val (_, bytes) = generateCover(settings(), current.finalBody)
             require(bytes.isNotEmpty()) { "封面图片为空" }
-            val name = writeCover(current, bytes)
-            require(name.isNotBlank()) { "封面文件为空" }
-            val replacement = current.copy(coverFile = name)
+            written = writeCover(current, bytes)
+            require(written!!.name.isNotBlank()) { "封面文件为空" }
+            val replacement = current.copy(coverFile = written!!.name)
             if (!repository.replaceIfCurrent(
                 dayKey,
                 expectedRevision,
@@ -121,13 +127,20 @@ internal class DailyStoryWorkerProcessor(
                 expectedFinalFingerprint = finalFingerprint,
                 expectedCoverFile = coverFile,
             )) {
-                deleteCover(name)
+                cleanupCoverIfUnreferenced(dayKey, written!!)
             }
             DailyStoryWorkOutcome.SUCCESS
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            written?.let { cleanupCoverIfUnreferenced(dayKey, it) }
             error.toDailyStoryOutcome()
+        }
+    }
+
+    private fun cleanupCoverIfUnreferenced(dayKey: String, written: CoverFileWrite) {
+        if (written.created && repository.get(dayKey)?.coverFile != written.name) {
+            deleteCover(written.name)
         }
     }
 
@@ -190,11 +203,12 @@ class DailyStoryWorker(
         const val INPUT_EXPECTED_COVER_FILE = "expected_cover_file"
         const val INPUT_WORK_TYPE = "work_type"
 
-        private fun writeCoverFile(context: Context, story: DailyStory, bytes: ByteArray): String {
+        private fun writeCoverFile(context: Context, story: DailyStory, bytes: ByteArray): CoverFileWrite {
             val directory = File(context.filesDir, "voice-diary/stories").apply { mkdirs() }
             val fingerprint = story.sourceFingerprint.ifBlank { "unknown" }.take(16)
             val name = "${story.dayKey}-cover-${story.revision}-$fingerprint.png"
             val target = File(directory, name)
+            val created = !target.exists()
             val temporary = File(directory, ".${name}.tmp")
             try {
                 FileOutputStream(temporary).use { stream ->
@@ -202,7 +216,7 @@ class DailyStoryWorker(
                     stream.fd.sync()
                 }
                 check(temporary.renameTo(target)) { "Unable to atomically save story cover" }
-                return name
+                return CoverFileWrite(name, created)
             } catch (error: Throwable) {
                 temporary.delete()
                 throw error

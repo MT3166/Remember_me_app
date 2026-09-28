@@ -8,6 +8,8 @@ import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.time.Instant
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -101,21 +103,36 @@ class DailyStoryWorkerTest {
         val context = TestContext()
         val stories = DailyStoryRepository(context)
         val source = stories.appendSegment("2026-09-27", "segment-1", "原始素材", 1_000L)
-        var result = StoryResult("新标题", "新正文")
-        val processor = DailyStoryWorkerProcessor(
+        val oldModelStarted = CompletableDeferred<Unit>()
+        val releaseOldModel = CompletableDeferred<Unit>()
+        val oldProcessor = DailyStoryWorkerProcessor(
             repository = stories,
             settings = { ModelSettings(textKey = "test-key") },
-            generateStory = { _, _, _ -> result },
+            generateStory = { _, _, _ ->
+                oldModelStarted.complete(Unit)
+                releaseOldModel.await()
+                StoryResult("旧标题", "旧正文")
+            },
+            generateCover = { _, _ -> error("不应生成封面") },
+        )
+        val newProcessor = DailyStoryWorkerProcessor(
+            repository = stories,
+            settings = { ModelSettings(textKey = "test-key") },
+            generateStory = { _, _, _ -> StoryResult("新标题", "新正文") },
             generateCover = { _, _ -> error("不应生成封面") },
         )
 
-        assertEquals(DailyStoryWorkOutcome.SUCCESS, processor.process(
+        val oldWorker = async {
+            oldProcessor.process(
+                source.dayKey, source.revision, source.sourceFingerprint, final = true,
+            )
+        }
+        oldModelStarted.await()
+        assertEquals(DailyStoryWorkOutcome.SUCCESS, newProcessor.process(
             source.dayKey, source.revision, source.sourceFingerprint, final = true,
         ))
-        result = StoryResult("旧标题", "旧正文")
-        assertEquals(DailyStoryWorkOutcome.SUCCESS, processor.process(
-            source.dayKey, source.revision, source.sourceFingerprint, final = true,
-        ))
+        releaseOldModel.complete(Unit)
+        assertEquals(DailyStoryWorkOutcome.SUCCESS, oldWorker.await())
 
         assertEquals("新标题", stories.get(source.dayKey)?.finalTitle)
         assertEquals("新正文", stories.get(source.dayKey)?.finalBody)
@@ -126,17 +143,34 @@ class DailyStoryWorkerTest {
         val context = TestContext()
         val stories = DailyStoryRepository(context)
         val source = stories.appendSegment("2026-09-27", "segment-1", "原始素材", 1_000L)
-        val processor = DailyStoryWorkerProcessor(
+        val draftModelStarted = CompletableDeferred<Unit>()
+        val releaseDraftModel = CompletableDeferred<Unit>()
+        val draftProcessor = DailyStoryWorkerProcessor(
             repository = stories,
             settings = { ModelSettings(textKey = "test-key") },
-            generateStory = { _, _, final ->
-                if (final) StoryResult("最终标题", "最终正文") else StoryResult("迟到草稿", "迟到草稿正文")
+            generateStory = { _, _, _ ->
+                draftModelStarted.complete(Unit)
+                releaseDraftModel.await()
+                StoryResult("迟到草稿", "迟到草稿正文")
             },
             generateCover = { _, _ -> error("不应生成封面") },
         )
+        val finalProcessor = DailyStoryWorkerProcessor(
+            repository = stories,
+            settings = { ModelSettings(textKey = "test-key") },
+            generateStory = { _, _, _ -> StoryResult("最终标题", "最终正文") },
+            generateCover = { _, _ -> error("不应生成封面") },
+        )
 
-        processor.process(source.dayKey, source.revision, source.sourceFingerprint, final = true)
-        processor.process(source.dayKey, source.revision, source.sourceFingerprint, final = false)
+        val lateDraft = async {
+            draftProcessor.process(source.dayKey, source.revision, source.sourceFingerprint, final = false)
+        }
+        draftModelStarted.await()
+        assertEquals(DailyStoryWorkOutcome.SUCCESS, finalProcessor.process(
+            source.dayKey, source.revision, source.sourceFingerprint, final = true,
+        ))
+        releaseDraftModel.complete(Unit)
+        assertEquals(DailyStoryWorkOutcome.SUCCESS, lateDraft.await())
 
         val current = stories.get(source.dayKey)!!
         assertEquals(DailyStoryState.READY, current.state)
@@ -149,31 +183,65 @@ class DailyStoryWorkerTest {
         val context = TestContext()
         val stories = DailyStoryRepository(context)
         val source = stories.appendSegment("2026-09-27", "segment-1", "原始素材", 1_000L)
-        val processor = DailyStoryWorkerProcessor(
+        val coverModelStarted = CompletableDeferred<Unit>()
+        val releaseOldCoverModel = CompletableDeferred<Unit>()
+        val oldCoverProcessor = DailyStoryWorkerProcessor(
+            repository = stories,
+            settings = { ModelSettings(textKey = "test-key") },
+            generateStory = { _, _, _ -> StoryResult("旧标题", "旧正文") },
+            generateCover = { _, _ ->
+                coverModelStarted.complete(Unit)
+                releaseOldCoverModel.await()
+                "old-prompt" to byteArrayOf(1, 2, 3)
+            },
+            writeCover = { _, _ -> CoverFileWrite("shared-cover.png", true) },
+        )
+        val newCoverProcessor = DailyStoryWorkerProcessor(
             repository = stories,
             settings = { ModelSettings(textKey = "test-key") },
             generateStory = { _, _, _ -> StoryResult("新标题", "新正文") },
-            generateCover = { _, _ -> "old-prompt" to byteArrayOf(1, 2, 3) },
-            writeCover = { _, _ -> "old-cover.png" },
+            generateCover = { _, _ -> "new-prompt" to byteArrayOf(4, 5, 6) },
+            writeCover = { _, _ -> CoverFileWrite("shared-cover.png", true) },
         )
 
-        processor.process(source.dayKey, source.revision, source.sourceFingerprint, final = true)
+        assertEquals(DailyStoryWorkOutcome.SUCCESS, newCoverProcessor.process(
+            source.dayKey, source.revision, source.sourceFingerprint, final = true,
+        ))
         val current = stories.get(source.dayKey)!!
-        val oldFinal = current.copy(finalTitle = "旧标题", finalBody = "旧正文")
-        val oldFinalFingerprint = DailyStoryRepository.finalFingerprint(oldFinal)
-
-        assertEquals(
-            DailyStoryWorkOutcome.SUCCESS,
-            processor.processCover(
+        val oldCover = async {
+            oldCoverProcessor.processCover(
                 current.dayKey,
                 current.revision,
                 current.sourceFingerprint,
-                expectedFinalFingerprint = oldFinalFingerprint,
+                expectedFinalFingerprint = DailyStoryRepository.finalFingerprint(current),
                 expectedCoverFile = "",
-            ),
+            )
+        }
+        coverModelStarted.await()
+        val coverFileDeletions = mutableListOf<String>()
+        val successfulCoverProcessor = DailyStoryWorkerProcessor(
+            repository = stories,
+            settings = { ModelSettings(textKey = "test-key") },
+            generateStory = { _, _, _ -> StoryResult("新标题", "新正文") },
+            generateCover = { _, _ -> "new-prompt" to byteArrayOf(7, 8, 9) },
+            writeCover = { _, _ -> CoverFileWrite("shared-cover.png", false) },
+            deleteCover = { coverFileDeletions += it },
         )
-        assertEquals("新正文", stories.get(source.dayKey)?.finalBody)
-        assertEquals("", stories.get(source.dayKey)?.coverFile)
+        assertEquals(DailyStoryWorkOutcome.SUCCESS, successfulCoverProcessor.processCover(
+            current.dayKey,
+            current.revision,
+            current.sourceFingerprint,
+            expectedFinalFingerprint = DailyStoryRepository.finalFingerprint(current),
+            expectedCoverFile = "",
+        ))
+        releaseOldCoverModel.complete(Unit)
+
+        assertEquals(
+            DailyStoryWorkOutcome.SUCCESS,
+            oldCover.await(),
+        )
+        assertEquals("shared-cover.png", stories.get(source.dayKey)?.coverFile)
+        assertTrue(coverFileDeletions.isEmpty())
     }
 
     @Test
@@ -240,7 +308,7 @@ class DailyStoryWorkerTest {
                 throw IOException("image offline")
             },
             enqueueCover = { scheduledCovers += it.dayKey },
-            writeCover = { _, _ -> "generated.png" },
+            writeCover = { _, _ -> CoverFileWrite("generated.png", true) },
         )
 
         assertEquals(
