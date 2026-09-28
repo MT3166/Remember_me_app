@@ -84,6 +84,12 @@ Verification:
 
 → 10 tests, 0 failures, 0 errors.
 
+## Late-cover test coverage refinement
+
+- The late-cover test now shares one `deleteCover` recorder between the old and successful workers.
+- The old model stub returns its generated image first; the test then pauses at the explicit write-before-CAS seam. The successful worker commits the same cover filename, after which the old worker is released into CAS and cleanup.
+- The test asserts the current story still references the same cover and the shared deletion recorder remains empty.
+
 `JAVA_HOME=/opt/homebrew/opt/openjdk@17 bash ./gradlew :app:testDebugUnitTest :app:assembleDebug`
 
 → build successful; 97 tests, 0 failures, 0 errors; `assembleDebug` passed.
