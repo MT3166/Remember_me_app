@@ -123,12 +123,14 @@ internal fun ActionBar(content: @Composable ColumnScope.() -> Unit) {
 
 @Composable
 private fun StudioInvite(onNew: () -> Unit, onRecord: () -> Unit, onLatest: (() -> Unit)?) {
-    Column(Modifier.fillMaxWidth().background(Leaf).padding(horizontal = 24.dp, vertical = 28.dp),
+    Column(Modifier.fillMaxWidth().background(SoftGreen, RoundedCornerShape(28.dp)).border(1.dp, Line, RoundedCornerShape(28.dp))
+        .padding(horizontal = 24.dp, vertical = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        StoryGardenIllustration()
         Text("今天，想说点什么？", style = MaterialTheme.typography.headlineLarge, textAlign = TextAlign.Center)
-        Text("开心的、难过的，都可以。", color = Muted, textAlign = TextAlign.Center)
-        Box(Modifier.widthIn(max = 440.dp).fillMaxWidth().background(Color(0xFF19482F), RoundedCornerShape(8.dp)).padding(bottom = 5.dp)) {
-            Command("说说今天", Icons.Default.Mic, Modifier.fillMaxWidth().heightIn(min = 64.dp), onClick = onRecord)
+        Text("想到哪里，就说到哪里。", color = Muted, textAlign = TextAlign.Center)
+        Box(Modifier.widthIn(max = 440.dp).fillMaxWidth().background(Color(0xFF19482F), RoundedCornerShape(18.dp)).padding(bottom = 5.dp)) {
+            Command("按一下，开始说", Icons.Default.Mic, Modifier.fillMaxWidth().heightIn(min = 64.dp), onClick = onRecord)
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = onNew, modifier = Modifier.heightIn(min = 48.dp)) {
@@ -138,6 +140,23 @@ private fun StudioInvite(onNew: () -> Unit, onRecord: () -> Unit, onLatest: (() 
                 Icon(Icons.AutoMirrored.Filled.MenuBook, null, Modifier.size(22.dp)); Spacer(Modifier.width(8.dp)); Text("看一篇")
             }
         }
+    }
+}
+
+@Composable
+private fun StoryGardenIllustration() {
+    Canvas(Modifier.size(142.dp)) {
+        val center = Offset(size.width / 2f, size.height / 2f)
+        drawCircle(Color(0xFFFFF4CF), size.minDimension * .42f, center)
+        drawCircle(Color(0xFFFFD88A), size.minDimension * .16f, Offset(center.x - 22.dp.toPx(), center.y - 24.dp.toPx()))
+        drawRoundRect(Color(0xFF8DBB86), Offset(center.x - 34.dp.toPx(), center.y + 8.dp.toPx()),
+            Size(68.dp.toPx(), 32.dp.toPx()), CornerRadius(20.dp.toPx()))
+        drawCircle(Color(0xFFEC9C7A), 12.dp.toPx(), Offset(center.x - 15.dp.toPx(), center.y + 6.dp.toPx()))
+        drawCircle(Color(0xFF7DAA79), 13.dp.toPx(), Offset(center.x + 25.dp.toPx(), center.y + 1.dp.toPx()))
+        drawRoundRect(Color(0xFF286C49), Offset(center.x - 4.dp.toPx(), center.y - 30.dp.toPx()),
+            Size(8.dp.toPx(), 52.dp.toPx()), CornerRadius(4.dp.toPx()))
+        drawCircle(Color.White, 3.dp.toPx(), Offset(center.x - 16.dp.toPx(), center.y - 16.dp.toPx()))
+        drawCircle(Color.White, 3.dp.toPx(), Offset(center.x + 16.dp.toPx(), center.y - 16.dp.toPx()))
     }
 }
 
@@ -337,20 +356,31 @@ private fun VoiceSurface(speech: SpeechController, onRecord: () -> Unit) {
         seconds = 0
         while (speech.active && speech.startedAt > 0) { seconds = ((SystemClock.elapsedRealtime() - speech.startedAt) / 1000).toInt(); delay(500) }
     }
-    Column(Modifier.fillMaxWidth().padding(vertical = 20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        Text(if (speech.processing) "正在把声音变成文字" else if (speech.listening) "我在听，你慢慢说" else "把今天说给我听", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
-        Text(if (speech.active) "想到哪里，就说到哪里。" else "一件小事，也可以是一篇日记。", color = Muted, textAlign = TextAlign.Center)
+    val listening = speech.listening
+    Column(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(28.dp)).border(1.dp, Line, RoundedCornerShape(28.dp))
+        .padding(horizontal = 20.dp, vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text("今天的声音", color = Green, style = MaterialTheme.typography.labelLarge)
+        Text(if (speech.processing) "正在收好你的声音" else if (listening) "我在听，你慢慢说" else "准备好就按一下", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
+        Text(if (speech.active) "想到哪里，就说到哪里。" else "开心的、难过的，都可以告诉我。", color = Muted, textAlign = TextAlign.Center)
         Canvas(Modifier.width(220.dp).height(44.dp)) {
             val gap = size.width / 17
             speech.levels.forEachIndexed { index, level ->
                 val height = 6.dp.toPx() + (size.height - 6.dp.toPx()) * level
-                drawRoundRect(Green, Offset(index * gap, (size.height - height) / 2), Size(5.dp.toPx(), height), CornerRadius(4.dp.toPx()))
+                drawRoundRect(if (listening) Green else Color(0xFFB7CDB2), Offset(index * gap, (size.height - height) / 2),
+                    Size(5.dp.toPx(), height), CornerRadius(4.dp.toPx()))
             }
         }
-        Button(onClick = onRecord, enabled = !speech.processing, shape = CircleShape, modifier = Modifier.size(128.dp), contentPadding = PaddingValues(0.dp)) {
-            Icon(if (speech.listening) Icons.Default.Stop else Icons.Default.Mic, if (speech.listening) "结束录音" else "开始录音", Modifier.size(48.dp))
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(158.dp).background(if (listening) Color(0xFFFFE2D5) else Color(0xFFE2F0CE), CircleShape)) {
+            Button(onClick = onRecord, enabled = !speech.processing, shape = CircleShape, modifier = Modifier.size(128.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = if (listening) Coral else Green), contentPadding = PaddingValues(0.dp)) {
+                Icon(if (listening) Icons.Default.Stop else Icons.Default.Mic, if (listening) "结束录音" else "开始录音", Modifier.size(48.dp))
+            }
         }
-        Text(if (speech.active) String.format(Locale.ROOT, "%02d:%02d", seconds / 60, seconds % 60) else "准备好了", color = Muted)
+        Surface(color = if (listening) Color(0xFFFFF0EA) else Warm, shape = RoundedCornerShape(50.dp)) {
+            Text(if (speech.active) String.format(Locale.ROOT, "%02d:%02d", seconds / 60, seconds % 60) else "按一下开始 · 再按一下结束",
+                color = if (listening) Coral else Ink, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.labelLarge)
+        }
         if (speech.partial.isNotBlank()) Text(speech.partial, style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
     }
 }
